@@ -10390,13 +10390,13 @@ if not ok then
 end
 
 -- =============================================================
--- ADDED: AGONY HUB OWNER MONITOR V1.3
--- Original AGONY HUB DEV V11.9.77 above is unchanged.
+-- ADDED: AGONY HUB OWNER MONITOR V1.6
+-- Original AGONY HUB DEV V11.9.79 above is unchanged.
 -- Includes: 20-minute owner agent and owner-only statistics GUI.
 -- WARNING: Do not publish this file while it contains live API secrets.
 -- =============================================================
 if ok then
--- AGONY HUB OWNER MONITOR V1.3 - COMBINED AGENT + OWNER GUI
+-- AGONY HUB OWNER MONITOR V1.6 - COMBINED AGENT + OWNER GUI
 -- Developer: mrpopsicle12
 -- Execute once per account AFTER main AGONY HUB is initialized.
 -- Every account sends first registration and a 20-minute heartbeat.
@@ -10420,6 +10420,8 @@ if not player then return end
 local API_URL = "https://agonyhub.lxi.be/api/track.php"
 local API_KEY = "3WD_Z43dzmGazPaEFSAQkcOCt23PbpRGNQGm4dH7VF4HIC8d"
 local HEARTBEAT_SECONDS = 20 * 60
+local REFRESH_POLL_SECONDS = 60 -- needed for owner-triggered refresh; GET is lightweight
+local REFRESH_URL = "https://agonyhub.lxi.be/api/refresh.php"
 local env = _G
 if type(getgenv) == "function" then
     local ok, result = pcall(getgenv)
@@ -10507,47 +10509,87 @@ local function baseName(value)
     end
     return name
 end
-local function secretCount()
+local function secretSnapshot()
     local ok, data = pcall(function()
         local controller = require(RS.Controllers.Core.DataController)
         local replica = controller:GetReplica()
         return replica and replica.Data
     end)
-    if not ok or type(data) ~= "table" then return nil end
+    if not ok or type(data) ~= "table" then return nil, nil, nil end
     local owned = data.Pets and data.Pets.Owned
-    if type(owned) ~= "table" then return nil end
+    if type(owned) ~= "table" then return nil, nil, nil end
     local config = loadCatalog()
-    if not config then return nil end
+    if not config then return nil, nil, nil end
     local lookup = {}
     for key, value in pairs(config) do
         if type(key) == "string" and type(value) == "table" then
             lookup[key:lower()] = value
         end
     end
-    local count = 0
+    local groups, count = {}, 0
+    local function clean(value, fallback, maxLen)
+        local text = type(value) == "string" and value or fallback
+        text = text:match("^%s*(.-)%s*$") or fallback
+        text = text:gsub("[%c]", " ")
+        if text == "" then text = fallback end
+        return text:sub(1, maxLen)
+    end
     for _, record in pairs(owned) do
         if type(record) == "table" then
-            local secret = secretRarity(record.BaseRarity)
-                or secretRarity(record.Rarity) or secretRarity(record.PetRarity)
-            if not secret then
-                for _, key in ipairs({"Name","BaseName","OriginalName","PetName"}) do
-                    local raw = record[key]
-                    local simple = baseName(raw)
-                    if simple then
-                        local item = lookup[simple:lower()] or lookup[raw:lower()]
-                        if item and secretRarity(item.Rarity) then secret = true; break end
-                    end
+            local matched = nil
+            local catalogName = nil
+            for _, field in ipairs({"Name", "BaseName", "OriginalName", "PetName"}) do
+                local raw = record[field]
+                local simple = baseName(raw)
+                if simple then
+                    local item = lookup[simple:lower()] or lookup[raw:lower()]
+                    if item and not matched then matched = item end
+                    if item and not catalogName then catalogName = simple end
                 end
             end
-            if secret then count = count + 1 end
+            local rarity = nil
+            for _, field in ipairs({"BaseRarity", "Rarity", "PetRarity"}) do
+                if secretRarity(record[field]) then rarity = record[field]; break end
+            end
+            if not rarity and matched and secretRarity(matched.Rarity) then
+                rarity = matched.Rarity
+            end
+            if rarity then
+                count += 1
+                local petName = clean(record.Name or catalogName or record.BaseName or record.PetName,
+                    "Unknown Secret Pet", 80)
+                rarity = clean(rarity, "Secret", 24)
+                local tier = clean(record.Tier, "Normal", 32)
+                local mutation = clean(record.Mutation, "", 32)
+                local key = table.concat({petName, rarity, tier, mutation}, "\0")
+                local group = groups[key]
+                if group then group.count += 1
+                else groups[key] = {name=petName,rarity=rarity,tier=tier,mutation=mutation,count=1} end
+            end
         end
     end
+    local all = {}
+    for _, entry in pairs(groups) do table.insert(all, entry) end
+    table.sort(all, function(a,b)
+        if a.rarity ~= b.rarity then return a.rarity > b.rarity end
+        if a.name ~= b.name then return a.name < b.name end
+        if a.tier ~= b.tier then return a.tier < b.tier end
+        return a.mutation < b.mutation
+    end)
+    -- The per-account HTTP request stays bounded to protect the free host.
+    local truncated = #all > 400
+    while #all > 400 do table.remove(all) end
+    return count, all, truncated
+end
+local function secretCount()
+    local count = secretSnapshot()
     return count
 end
+
 local lastReportedSecrets = nil
 local sending = false
 local lastSendAt = -math.huge
-local function sendHeartbeat()
+local function sendHeartbeat(refreshGeneration)
     if not active or sending then return false end
     sending = true
     local sender = getRequest()
@@ -10556,13 +10598,16 @@ local function sendHeartbeat()
         warn("[AGONY OWNER] Executor HTTP request function unavailable")
         return false
     end
-    local count = secretCount()
+    local count, petList, truncated = secretSnapshot()
     local payload = {
         userId = player.UserId,
         username = player.Name,
         running = true,
         grinding = hubExecuted(), -- Successfully loaded via auto-execute = grinding, independent of farming toggles
         secretCount = count, -- nil means inventory unavailable: don't overwrite last valid count.
+        secretPets = petList, -- grouped per-pet breakdown; nil if inventory unavailable
+        secretPetsTruncated = truncated or false,
+        refreshGeneration = refreshGeneration, -- command ID; server validates before counting an ACK
     }
     local ok, response = pcall(sender, {
         Url = API_URL, Method = "POST",
@@ -10584,6 +10629,29 @@ local function sendHeartbeat()
         warn("[AGONY OWNER] HTTP", tostring(code), tostring(response.Body or ""):sub(1,100))
     end
     return succeeded == true
+end
+
+-- V1.6: online-targeted, authenticated polling for owner dashboard refresh requests.
+-- Each active client checks the command roughly once a minute; if it changes,
+-- immediately POST an authoritative inventory snapshot, outside the 20-min schedule.
+-- Clients cannot be pushed to directly by a normal PHP website.
+local lastHandledRefresh = nil
+local function pollRefreshCommand()
+    if not active then return nil end
+    local sender = getRequest()
+    if not sender then return nil end
+    local ok, response = pcall(sender, {
+        Url = REFRESH_URL .. "?userId=" .. tostring(player.UserId), Method = "GET",
+        Headers = { ["X-Agony-Key"] = API_KEY }
+    })
+    if not ok or type(response) ~= "table" then return nil end
+    local status = tonumber(response.StatusCode or response.Status)
+    if not status or status < 200 or status >= 300 then return nil end
+    local decodedOk, body = pcall(function() return HttpService:JSONDecode(response.Body or "") end)
+    if not decodedOk or type(body) ~= "table" or body.success ~= true then return nil end
+    local generation = body.generation
+    if type(generation) ~= "string" or #generation ~= 24 or generation == lastHandledRefresh then return nil end
+    return generation
 end
 
 -- SecretEggFlash is broadcast globally. Remember local events for diagnostic purposes,
@@ -10631,13 +10699,24 @@ task.spawn(function()
     end)
 
     local nextHeartbeat = os.clock() + HEARTBEAT_SECONDS
+    local nextRefreshPoll = os.clock() + math.random(3, 15) -- stagger startup requests
     while active do
         if not hubExecuted() then stop(); break end
-        if os.clock() >= nextHeartbeat then
-            -- Inventory is read only for this scheduled upload; latest snapshot
-            -- includes all Secret variants, irrespective of earlier hatch events.
-            sendHeartbeat()
-            pendingSecretHatches = 0
+        local now = os.clock()
+        if now >= nextRefreshPoll then
+            nextRefreshPoll = now + REFRESH_POLL_SECONDS + math.random(0, 9)
+            local generation = pollRefreshCommand()
+            if generation and active then
+                if sendHeartbeat(generation) then
+                    lastHandledRefresh = generation
+                    pendingSecretHatches = 0
+                    nextHeartbeat = os.clock() + HEARTBEAT_SECONDS
+                end
+            end
+        end
+        if active and os.clock() >= nextHeartbeat then
+            -- Same 20-minute heartbeat when no owner force-refresh is pending.
+            if sendHeartbeat() then pendingSecretHatches = 0 end
             nextHeartbeat = os.clock() + HEARTBEAT_SECONDS
         end
         task.wait(2)
@@ -10751,4 +10830,4 @@ end)
 
 end
 
-end -- AGONY HUB OWNER MONITOR V1.3 (ADDED ONLY)
+end -- AGONY HUB OWNER MONITOR V1.6 (ADDED ONLY)
