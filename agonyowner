@@ -10457,7 +10457,7 @@ local function sendHeartbeat()
         userId = player.UserId,
         username = player.Name,
         running = true,
-        grinding = isGrinding(),
+        grinding = hubExecuted(), -- Successfully loaded via auto-execute = grinding, independent of farming toggles
         secretCount = count, -- nil means inventory unavailable: don't overwrite last valid count.
     }
     local ok, response = pcall(sender, {
