@@ -10396,7 +10396,7 @@ end
 -- WARNING: Do not publish this file while it contains live API secrets.
 -- =============================================================
 if ok then
--- AGONY HUB OWNER MONITOR V1.6 - COMBINED AGENT + OWNER GUI
+-- AGONY HUB OWNER MONITOR V1.8 - COMBINED AGENT + OWNER GUI
 -- Developer: mrpopsicle12
 -- Execute once per account AFTER main AGONY HUB is initialized.
 -- Every account sends first registration and a 20-minute heartbeat.
@@ -10407,7 +10407,7 @@ if ok then
 
 -- ACCOUNT TRACKING
 do
--- AGONY HUB OWNER AGENT V1.2 LOW REQUEST -- PRIVATE OWNER ACCOUNTS ONLY
+-- AGONY HUB OWNER AGENT V1.8 EVENTS + FORCE REFRESH -- PRIVATE OWNER ACCOUNTS ONLY
 -- Run on each account AFTER the full AGONY HUB DEV has executed.
 -- Register immediately, then send inventory + status only every 20 minutes.
 -- The server marks the account offline after 25 minutes without a heartbeat.
@@ -10418,6 +10418,7 @@ local HttpService = game:GetService("HttpService")
 local player = Players.LocalPlayer
 if not player then return end
 local API_URL = "https://agonyhub.lxi.be/api/track.php"
+local EVENT_URL = "https://agonyhub.lxi.be/api/events.php"
 local API_KEY = "3WD_Z43dzmGazPaEFSAQkcOCt23PbpRGNQGm4dH7VF4HIC8d"
 local HEARTBEAT_SECONDS = 20 * 60
 local REFRESH_POLL_SECONDS = 60 -- needed for owner-triggered refresh; GET is lightweight
@@ -10524,6 +10525,9 @@ local function secretSnapshot()
     for key, value in pairs(config) do
         if type(key) == "string" and type(value) == "table" then
             lookup[key:lower()] = value
+            for _, alias in ipairs({"Name", "PetName", "BaseName", "OriginalName"}) do
+                if type(value[alias]) == "string" then lookup[value[alias]:lower()] = value end
+            end
         end
     end
     local groups, count = {}, 0
@@ -10551,8 +10555,10 @@ local function secretSnapshot()
             for _, field in ipairs({"BaseRarity", "Rarity", "PetRarity"}) do
                 if secretRarity(record[field]) then rarity = record[field]; break end
             end
-            if not rarity and matched and secretRarity(matched.Rarity) then
-                rarity = matched.Rarity
+            if not rarity and matched then
+                for _, field in ipairs({"Rarity", "BaseRarity", "PetRarity"}) do
+                    if secretRarity(matched[field]) then rarity = matched[field]; break end
+                end
             end
             if rarity then
                 count += 1
@@ -10654,6 +10660,33 @@ local function pollRefreshCommand()
     return generation
 end
 
+-- Report new Secret hatches once per event (not on every dashboard refresh).
+-- Event details come from this account's confirmed SecretEggFlash signal.
+local function postHatchEvent(data)
+    task.wait(1.5) -- Give inventory replica time to receive the new pet name.
+    if not active or type(data) ~= "table" or tonumber(data.UserId) ~= player.UserId then return end
+    local rarity = tostring(data.Rarity or "")
+    if not secretRarity(rarity) then return end
+    local petName = data.PetName or data.Name or data.Pet or data.PetId
+    local rawId = data.PetId
+    if type(rawId) == "string" then
+        pcall(function()
+            local c=require(RS.Controllers.Core.DataController)
+            local replica=c:GetReplica()
+            local found=replica and replica.Data and replica.Data.Pets and replica.Data.Pets.Owned and replica.Data.Pets.Owned[rawId]
+            if found and type(found.Name)=="string" then petName=found.Name end
+        end)
+    end
+    petName=tostring(petName or "New Secret Pet"):sub(1,80)
+    local sender=getRequest()
+    if not sender then return end
+    local payload={userId=player.UserId,username=player.Name,
+        petName=petName,rarity=rarity,eventId=HttpService:GenerateGUID(false)}
+    pcall(sender,{Url=EVENT_URL,Method="POST",Headers={
+        ["Content-Type"]="application/json",["X-Agony-Key"]=API_KEY},
+        Body=HttpService:JSONEncode(payload)})
+end
+
 -- SecretEggFlash is broadcast globally. Remember local events for diagnostic purposes,
 -- but do NOT send an extra HTTP request: next scheduled heartbeat reports the
 -- authoritative inventory snapshot, including newly hatched/traded/deleted pets.
@@ -10661,7 +10694,10 @@ local pendingSecretHatches = 0
 local function onSecretFlash(data)
     if not active or type(data) ~= "table" then return end
     if tonumber(data.UserId) ~= player.UserId then return end
-    if secretRarity(data.Rarity) then pendingSecretHatches += 1 end
+    if secretRarity(data.Rarity) then
+        pendingSecretHatches += 1
+        task.spawn(postHatchEvent, data)
+    end
 end
 
 -- Only accounts whose full AGONY HUB successfully initialized are registered.
@@ -10830,4 +10866,4 @@ end)
 
 end
 
-end -- AGONY HUB OWNER MONITOR V1.6 (ADDED ONLY)
+end -- AGONY HUB OWNER MONITOR V1.8 (ADDED ONLY)
