@@ -1,198 +1,218 @@
--- AGONY HUB DEV - VULN FREEZE TEST
+-- AGONY HUB DEV - VULN FREEZE TEST (LOCAL VISUAL ONLY)
 -- Developer: mrpopsicle12
--- Standalone local-only test. No external requests or farming features.
--- Freeze affects the local client's view / locally simulated objects only.
+-- Only one tab: Vuln -> Freeze Game ON/OFF.
+-- Does NOT overload, lag, or crash a Roblox server or other players.
 
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
+local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-
 local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-local global = (type(getgenv) == "function" and getgenv()) or _G
+local pg = player:WaitForChild("PlayerGui")
+local env = _G
+if type(getgenv) == "function" then
+    local ok, e = pcall(getgenv)
+    if ok and type(e) == "table" then env = e end
+end
+if type(env.AGONY_VULN_CLEANUP) == "function" then pcall(env.AGONY_VULN_CLEANUP) end
+local previous = pg:FindFirstChild("AgonyVulnFreezeTest")
+if previous then previous:Destroy() end
 
--- Remove only this test's previous instance when re-executed.
-if type(global.AGONY_VULN_CLEANUP) == "function" then
-    pcall(global.AGONY_VULN_CLEANUP)
+local alive, frozen = true, false
+local connections = {}
+local function connect(signal, callback)
+    local connection = signal:Connect(callback)
+    table.insert(connections, connection)
+    return connection
+end
+local function mk(class, parent, props)
+    local obj = Instance.new(class)
+    for key, value in pairs(props or {}) do obj[key] = value end
+    obj.Parent = parent
+    return obj
+end
+local function corner(obj, r)
+    mk("UICorner", obj, {CornerRadius = UDim.new(0, r or 8)})
+    return obj
 end
 
-local old = playerGui:FindFirstChild("AgonyVulnFreezeTest")
-if old then old:Destroy() end
+local bg = Color3.fromRGB(9, 16, 32)
+local card = Color3.fromRGB(19, 36, 65)
+local white = Color3.fromRGB(244, 247, 255)
+local muted = Color3.fromRGB(150, 168, 197)
+local red = Color3.fromRGB(181, 56, 76)
+local green = Color3.fromRGB(30, 158, 107)
 
-local frozen = false
-local active = true
-local savedParts = {}
-local addedConnection
-local cameraConnection
-local fixedCamera
-local oldCameraType
-local oldCameraSubject
+local gui = mk("ScreenGui", pg, {
+    Name = "AgonyVulnFreezeTest", ResetOnSpawn = false,
+    IgnoreGuiInset = true, DisplayOrder = 999999,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
 
-local function freezePart(part)
-    if not part:IsA("BasePart") or savedParts[part] then return end
-    savedParts[part] = {
-        anchored = part.Anchored,
-        linear = part.AssemblyLinearVelocity,
-        angular = part.AssemblyAngularVelocity,
-    }
-    pcall(function()
-        part.Anchored = true
-        part.AssemblyLinearVelocity = Vector3.zero
-        part.AssemblyAngularVelocity = Vector3.zero
-    end)
-end
-
-local function stopFreeze()
+-- Lightweight visual freeze: lock local camera and local movement controls.
+-- IMPORTANT: don't anchor workspace, run infinite loops or flood remotes.
+local camera, oldType, oldSubject, oldCF, cameraConn, controls
+local oldWalkSpeed, oldJumpPower, oldJumpHeight, oldAutoRotate
+local frozenHum
+local function releaseFreeze()
     frozen = false
-    if addedConnection then addedConnection:Disconnect(); addedConnection = nil end
-    if cameraConnection then cameraConnection:Disconnect(); cameraConnection = nil end
-    local camera = workspace.CurrentCamera
-    if camera then
+    if cameraConn then cameraConn:Disconnect(); cameraConn = nil end
+    if camera and camera.Parent then
         pcall(function()
-            camera.CameraType = oldCameraType or Enum.CameraType.Custom
-            if oldCameraSubject and oldCameraSubject.Parent then camera.CameraSubject = oldCameraSubject end
+            camera.CameraType = oldType or Enum.CameraType.Custom
+            if oldSubject and oldSubject.Parent then camera.CameraSubject = oldSubject end
         end)
     end
-    -- Restore original anchor state. Do not restore old velocities: it can
-    -- violently launch character/physics parts after a long pause.
-    for part, state in pairs(savedParts) do
-        if part and part.Parent then
-            pcall(function() part.Anchored = state.anchored end)
-        end
-        savedParts[part] = nil
+    if frozenHum and frozenHum.Parent then
+        pcall(function()
+            frozenHum.WalkSpeed = oldWalkSpeed or 16
+            if oldJumpPower ~= nil then frozenHum.JumpPower = oldJumpPower end
+            if oldJumpHeight ~= nil then frozenHum.JumpHeight = oldJumpHeight end
+            if oldAutoRotate ~= nil then frozenHum.AutoRotate = oldAutoRotate end
+        end)
     end
+    if controls then pcall(function() controls:Enable() end) end
+    frozenHum, controls, camera, oldSubject = nil, nil, nil, nil
 end
-
-local function startFreeze()
+local function engageFreeze()
     if frozen then return end
     frozen = true
-    local camera = workspace.CurrentCamera
+    camera = workspace.CurrentCamera
     if camera then
-        oldCameraType = camera.CameraType
-        oldCameraSubject = camera.CameraSubject
-        fixedCamera = camera.CFrame
+        oldType, oldSubject, oldCF = camera.CameraType, camera.CameraSubject, camera.CFrame
         camera.CameraType = Enum.CameraType.Scriptable
-        camera.CFrame = fixedCamera
-        cameraConnection = RunService.RenderStepped:Connect(function()
-            if frozen and camera.Parent then camera.CFrame = fixedCamera end
+        camera.CFrame = oldCF
+        cameraConn = connect(RunService.RenderStepped, function()
+            if frozen and camera and camera.Parent then camera.CFrame = oldCF end
         end)
     end
-    for _, instance in ipairs(workspace:GetDescendants()) do
-        if not frozen then break end
-        if instance:IsA("BasePart") then freezePart(instance) end
+    local character = player.Character
+    frozenHum = character and character:FindFirstChildOfClass("Humanoid")
+    if frozenHum then
+        oldWalkSpeed, oldJumpPower, oldJumpHeight, oldAutoRotate = frozenHum.WalkSpeed,
+            frozenHum.JumpPower, frozenHum.JumpHeight, frozenHum.AutoRotate
+        frozenHum.WalkSpeed = 0
+        frozenHum.JumpPower = 0
+        frozenHum.JumpHeight = 0
+        frozenHum.AutoRotate = false
     end
-    addedConnection = workspace.DescendantAdded:Connect(function(instance)
-        if frozen and instance:IsA("BasePart") then freezePart(instance) end
+    pcall(function()
+        local scripts = player:FindFirstChild("PlayerScripts")
+        local module = scripts and scripts:FindFirstChild("PlayerModule")
+        if module then
+            controls = require(module):GetControls()
+            controls:Disable()
+        end
     end)
 end
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "AgonyVulnFreezeTest"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.DisplayOrder = 999999
-gui.Parent = playerGui
-
-local function make(class, props, parent)
-    local item = Instance.new(class)
-    for key, value in pairs(props) do item[key] = value end
-    item.Parent = parent
-    return item
-end
-
-local main = make("Frame", {
-    Name = "Window", Size = UDim2.fromOffset(320, 180),
-    Position = UDim2.new(0.5, -160, 0.5, -90),
-    BackgroundColor3 = Color3.fromRGB(9, 16, 33), BorderSizePixel = 0,
-}, gui)
-make("UICorner", {CornerRadius = UDim.new(0, 10)}, main)
-make("UIStroke", {Color = Color3.fromRGB(43, 91, 175), Thickness = 1.2}, main)
-
-local header = make("TextLabel", {
-    BackgroundTransparency = 1, Text = "AGONY HUB", Font = Enum.Font.GothamBold,
-    TextSize = 17, TextColor3 = Color3.fromRGB(235, 70, 82),
+local window = corner(mk("Frame", gui, {
+    Name = "Window", Size = UDim2.fromOffset(340, 196),
+    Position = UDim2.new(0.5, -170, 0.5, -98),
+    BackgroundColor3 = bg, BorderSizePixel = 0,
+}), 10)
+mk("UIStroke", window, {Color = Color3.fromRGB(45, 94, 176), Thickness = 1.3})
+local header = mk("TextLabel", window, {
+    Active = true, BackgroundTransparency = 1, Text = "AGONY HUB",
+    TextColor3 = Color3.fromRGB(236, 64, 78), Font = Enum.Font.GothamBold,
+    TextSize = 17, TextXAlignment = Enum.TextXAlignment.Left,
+    Size = UDim2.fromOffset(230, 42), Position = UDim2.fromOffset(14, 4),
+})
+local close = corner(mk("TextButton", window, {
+    Text = "×", TextSize = 20, TextColor3 = white,
+    Font = Enum.Font.GothamBold, BackgroundColor3 = red,
+    BorderSizePixel = 0, Size = UDim2.fromOffset(29, 27),
+    Position = UDim2.new(1, -40, 0, 10),
+}), 6)
+local tab = corner(mk("TextLabel", window, {
+    Text = "Vuln", TextColor3 = white, Font = Enum.Font.GothamBold,
+    TextSize = 13, BackgroundColor3 = Color3.fromRGB(24, 70, 132),
+    BorderSizePixel = 0, Size = UDim2.fromOffset(84, 34),
+    Position = UDim2.fromOffset(12, 59),
+}), 6)
+local panel = corner(mk("Frame", window, {
+    Size = UDim2.fromOffset(220, 103), Position = UDim2.fromOffset(108, 59),
+    BackgroundColor3 = card, BorderSizePixel = 0,
+}), 8)
+mk("TextLabel", panel, {
+    BackgroundTransparency = 1, Text = "Freeze Game", TextColor3 = white,
+    Font = Enum.Font.GothamMedium, TextSize = 12,
     TextXAlignment = Enum.TextXAlignment.Left,
-    Size = UDim2.fromOffset(200, 37), Position = UDim2.fromOffset(14, 5),
-}, main)
+    Size = UDim2.fromOffset(120, 34), Position = UDim2.fromOffset(10, 8),
+})
+local toggle = corner(mk("TextButton", panel, {
+    Text = "OFF", TextColor3 = white, Font = Enum.Font.GothamBold,
+    TextSize = 12, BackgroundColor3 = red, BorderSizePixel = 0,
+    Size = UDim2.fromOffset(64, 28), Position = UDim2.new(1, -74, 0, 11),
+}), 6)
+mk("TextLabel", panel, {
+    Text = "Local visual + movement freeze only", TextColor3 = muted,
+    TextSize = 10, Font = Enum.Font.Gotham,
+    TextXAlignment = Enum.TextXAlignment.Center,
+    BackgroundTransparency = 1, Size = UDim2.new(1, -10, 0, 31),
+    Position = UDim2.fromOffset(5, 54), TextWrapped = true,
+})
 
-local close = make("TextButton", {
-    BackgroundColor3 = Color3.fromRGB(117, 38, 55), Text = "X",
-    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Size = UDim2.fromOffset(28, 25),
-    Position = UDim2.new(1, -39, 0, 10), BorderSizePixel = 0,
-}, main)
-make("UICorner", {CornerRadius = UDim.new(0, 5)}, close)
+local floating = corner(mk("TextButton", gui, {
+    Name = "FloatingOpenClose", Text = "AG", TextColor3 = white,
+    Font = Enum.Font.GothamBlack, TextSize = 15,
+    BackgroundColor3 = Color3.fromRGB(17, 40, 80), BorderSizePixel = 0,
+    Size = UDim2.fromOffset(48, 48), Position = UDim2.new(0, 18, 0.5, -24),
+    ZIndex = 20,
+}), 9)
+mk("UIStroke", floating, {Color = Color3.fromRGB(58, 106, 204), Thickness = 1.5})
 
-local tab = make("TextButton", {
-    Text = "Vuln", Font = Enum.Font.GothamBold, TextSize = 13,
-    TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = Color3.fromRGB(23, 65, 129),
-    BorderSizePixel = 0, Size = UDim2.fromOffset(78, 34),
-    Position = UDim2.fromOffset(12, 54),
-}, main)
-make("UICorner", {CornerRadius = UDim.new(0, 6)}, tab)
-
-local panel = make("Frame", {
-    Position = UDim2.fromOffset(100, 54), Size = UDim2.fromOffset(207, 94),
-    BorderSizePixel = 0, BackgroundColor3 = Color3.fromRGB(18, 32, 58),
-}, main)
-make("UICorner", {CornerRadius = UDim.new(0, 7)}, panel)
-
-make("TextLabel", {
-    Text = "Freeze Game", BackgroundTransparency = 1,
-    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamMedium,
-    TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
-    Size = UDim2.fromOffset(105, 35), Position = UDim2.fromOffset(10, 13),
-}, panel)
-
-local toggle = make("TextButton", {
-    Text = "OFF", TextColor3 = Color3.new(1, 1, 1),
-    Font = Enum.Font.GothamBold, TextSize = 12,
-    BackgroundColor3 = Color3.fromRGB(169, 55, 69), BorderSizePixel = 0,
-    Position = UDim2.fromOffset(132, 17), Size = UDim2.fromOffset(65, 28),
-}, panel)
-make("UICorner", {CornerRadius = UDim.new(0, 6)}, toggle)
-
-local function syncToggle()
+local function updateToggle()
     toggle.Text = frozen and "ON" or "OFF"
-    toggle.BackgroundColor3 = frozen and Color3.fromRGB(32, 157, 105) or Color3.fromRGB(169, 55, 69)
+    toggle.BackgroundColor3 = frozen and green or red
 end
+connect(toggle.MouseButton1Click, function()
+    if not alive then return end
+    if frozen then releaseFreeze() else engageFreeze() end
+    updateToggle()
+end)
+connect(close.MouseButton1Click, function() window.Visible = false end)
 
-toggle.MouseButton1Click:Connect(function()
-    if not active then return end
-    if frozen then stopFreeze() else startFreeze() end
-    syncToggle()
-end)
-
--- Drag by the title area, with mouse or touchscreen.
-local dragging = false
-local dragStart, originalPosition
-local dragInput
-header.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        originalPosition = main.Position
-        dragInput = input
-    end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input == dragInput or input.UserInputType == Enum.UserInputType.MouseMovement) then
-        local delta = input.Position - dragStart
-        main.Position = UDim2.new(originalPosition.X.Scale, originalPosition.X.Offset + delta.X,
-            originalPosition.Y.Scale, originalPosition.Y.Offset + delta.Y)
-    end
-end)
-UserInputService.InputEnded:Connect(function(input)
-    if input == dragInput or (dragging and input.UserInputType == Enum.UserInputType.MouseButton1) then
-        dragging = false
-    end
-end)
+-- Drag works with mouse and touch; pressing floating AG toggles window.
+local function draggable(target, handle, clickFunction)
+    local dragging, startPos, initialPos, activeInput, moved = false, nil, nil, nil, false
+    connect(handle.InputBegan, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            moved = false
+            activeInput = input
+            startPos = input.Position
+            initialPos = target.Position
+        end
+    end)
+    connect(UIS.InputChanged, function(input)
+        if not dragging then return end
+        if input == activeInput or (activeInput and activeInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local delta = input.Position - startPos
+            if delta.Magnitude > 6 then moved = true end
+            target.Position = UDim2.new(initialPos.X.Scale, initialPos.X.Offset + delta.X,
+                initialPos.Y.Scale, initialPos.Y.Offset + delta.Y)
+        end
+    end)
+    connect(UIS.InputEnded, function(input)
+        if not dragging then return end
+        if input == activeInput or (activeInput and activeInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseButton1) then
+            dragging = false
+            activeInput = nil
+            if clickFunction and not moved then clickFunction() end
+        end
+    end)
+end
+draggable(window, header)
+draggable(floating, floating, function() window.Visible = not window.Visible end)
 
 local function cleanup()
-    if not active then return end
-    active = false
-    stopFreeze()
+    if not alive then return end
+    alive = false
+    releaseFreeze()
+    for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     if gui.Parent then gui:Destroy() end
 end
-global.AGONY_VULN_CLEANUP = cleanup
-close.MouseButton1Click:Connect(cleanup)
+env.AGONY_VULN_CLEANUP = cleanup
+connect(player.CharacterAdded, function()
+    if frozen then releaseFreeze(); updateToggle() end
+end)
