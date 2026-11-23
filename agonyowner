@@ -10396,7 +10396,7 @@ end
 -- WARNING: Do not publish this file while it contains live API secrets.
 -- =============================================================
 if ok then
--- AGONY HUB OWNER MONITOR V1.8 - COMBINED AGENT + OWNER GUI
+-- AGONY HUB OWNER MONITOR V1.10 - COMBINED AGENT + OWNER GUI
 -- Developer: mrpopsicle12
 -- Execute once per account AFTER main AGONY HUB is initialized.
 -- Every account sends first registration and a 20-minute heartbeat.
@@ -10407,7 +10407,7 @@ if ok then
 
 -- ACCOUNT TRACKING
 do
--- AGONY HUB OWNER AGENT V1.8 EVENTS + FORCE REFRESH -- PRIVATE OWNER ACCOUNTS ONLY
+-- AGONY HUB OWNER AGENT V1.10 - SECRET-ONLY FORCE REFRESH -- PRIVATE OWNER ACCOUNTS ONLY
 -- Run on each account AFTER the full AGONY HUB DEV has executed.
 -- Register immediately, then send inventory + status only every 20 minutes.
 -- The server marks the account offline after 25 minutes without a heartbeat.
@@ -10421,7 +10421,7 @@ local API_URL = "https://agonyhub.lxi.be/api/track.php"
 local EVENT_URL = "https://agonyhub.lxi.be/api/events.php"
 local API_KEY = "3WD_Z43dzmGazPaEFSAQkcOCt23PbpRGNQGm4dH7VF4HIC8d"
 local HEARTBEAT_SECONDS = 20 * 60
-local REFRESH_POLL_SECONDS = 60 -- needed for owner-triggered refresh; GET is lightweight
+local REFRESH_POLL_SECONDS = 60 -- only accounts WITH Secrets poll the owner refresh endpoint
 local REFRESH_URL = "https://agonyhub.lxi.be/api/refresh.php"
 local env = _G
 if type(getgenv) == "function" then
@@ -10691,12 +10691,33 @@ end
 -- but do NOT send an extra HTTP request: next scheduled heartbeat reports the
 -- authoritative inventory snapshot, including newly hatched/traded/deleted pets.
 local pendingSecretHatches = 0
+local firstSecretSyncPending = false
 local function onSecretFlash(data)
     if not active or type(data) ~= "table" then return end
     if tonumber(data.UserId) ~= player.UserId then return end
     if secretRarity(data.Rarity) then
         pendingSecretHatches += 1
         task.spawn(postHatchEvent, data)
+        -- Zero-Secret accounts do not poll /api/refresh.php. When their FIRST
+        -- actual Secret appears in the replicated inventory, send ONE early
+        -- inventory POST so they become collector-eligible without waiting 20m.
+        if lastReportedSecrets == 0 and not firstSecretSyncPending then
+            firstSecretSyncPending = true
+            task.spawn(function()
+                for _ = 1, 12 do
+                    if not active then break end
+                    task.wait(1.5)
+                    local count = secretCount()
+                    if count and count > 0 then
+                        if not sending and sendHeartbeat() then
+                            pendingSecretHatches = 0
+                            break
+                        end
+                    end
+                end
+                firstSecretSyncPending = false
+            end)
+        end
     end
 end
 
@@ -10741,12 +10762,27 @@ task.spawn(function()
         local now = os.clock()
         if now >= nextRefreshPoll then
             nextRefreshPoll = now + REFRESH_POLL_SECONDS + math.random(0, 9)
-            local generation = pollRefreshCommand()
-            if generation and active then
-                if sendHeartbeat(generation) then
-                    lastHandledRefresh = generation
-                    pendingSecretHatches = 0
-                    nextHeartbeat = os.clock() + HEARTBEAT_SECONDS
+            -- STRICT: accounts with 0 Secrets NEVER poll /api/refresh.php.
+            -- The initial registration and 20-minute heartbeat are retained
+            -- so the dashboard can show ONLINE/OFFLINE and new inventory.
+            if type(lastReportedSecrets) == "number" and lastReportedSecrets > 0 then
+                -- Local check only (no HTTP). Stop polling after all Secrets
+                -- have been traded/removed, and sync 0 to the website once.
+                local currentSecrets = secretCount()
+                if currentSecrets == 0 then
+                    if sendHeartbeat() then
+                        pendingSecretHatches = 0
+                        nextHeartbeat = os.clock() + HEARTBEAT_SECONDS
+                    end
+                elseif currentSecrets ~= nil then
+                    local generation = pollRefreshCommand()
+                    if generation and active then
+                        if sendHeartbeat(generation) then
+                            lastHandledRefresh = generation
+                            pendingSecretHatches = 0
+                            nextHeartbeat = os.clock() + HEARTBEAT_SECONDS
+                        end
+                    end
                 end
             end
         end
@@ -10866,4 +10902,4 @@ end)
 
 end
 
-end -- AGONY HUB OWNER MONITOR V1.8 (ADDED ONLY)
+end -- AGONY HUB OWNER MONITOR V1.10 (ADDED ONLY)
