@@ -15,6 +15,8 @@ local pg = player:WaitForChild("PlayerGui")
 local alive = true
 local conns = {}
 local Hub = {}
+local identityHidden = options.HideUsername ~= false
+local welcomeLabels = {}
 local function on(signal, handler)
 local c = signal:Connect(handler)
 table.insert(conns, c)
@@ -299,7 +301,7 @@ local tabScroll = ui("ScrollingFrame", side, {
 Name = "AgonyTabScroll",
 Active = true,
 ScrollingEnabled = true,
-Size = UDim2.new(1, -20, 1, -181),
+Size = UDim2.new(1, -20, 1, -292),
 Position = UDim2.fromOffset(10, 92),
 BackgroundTransparency = 1,
 BorderSizePixel = 0,
@@ -345,8 +347,8 @@ BackgroundTransparency = 1
 }), 17)
 local username = label(
 profile,
-"@" .. player.Name,
-UDim2.new(1, -53, 0, 23),
+"********",
+UDim2.new(1, -95, 0, 23),
 UDim2.fromOffset(49, 5),
 11
 )
@@ -357,9 +359,109 @@ Enum.TextYAlignment.Center
 local profileCaption = label(profile, "LOCAL PLAYER", UDim2.new(1,-53,0,16), UDim2.fromOffset(49,27),9)
 profileCaption.TextColor3 = C.red
 stroke(profile,C.line,0.15)
+local privateAvatar = rounded(ui("Frame", profile, {
+    Size=UDim2.fromOffset(36,36), Position=UDim2.fromOffset(7,7),
+    BackgroundColor3=C.selected, BorderSizePixel=0
+}), 17)
+local privateIcon=label(privateAvatar,"AG",UDim2.fromScale(1,1),nil,12)
+privateIcon.TextXAlignment=Enum.TextXAlignment.Center
+local privacyButton=button(profile,"SHOW",UDim2.fromOffset(40,21),UDim2.new(1,-43,0,5))
+privacyButton.TextSize=9
+privacyButton.BackgroundColor3=C.selected
+stroke(privacyButton,C.red,0.45)
+profileCaption.TextSize=8
+local function refreshPrivacy()
+    username.Text = identityHidden and "********" or ("@" .. player.Name)
+    avatar.Visible = not identityHidden
+    privateAvatar.Visible = identityHidden
+    privacyButton.Text = identityHidden and "SHOW" or "HIDE"
+    profileCaption.Text = identityHidden and "PRIVATE MODE" or "LOCAL PLAYER"
+    for _, welcome in ipairs(welcomeLabels) do
+        welcome.Text = "Welcome, " .. (identityHidden and "********" or player.DisplayName)
+    end
+end
+function Hub:SetPrivacy(value)
+    identityHidden = value == true
+    refreshPrivacy()
+end
+on(privacyButton.Activated,function() Hub:SetPrivacy(not identityHidden) end)
+refreshPrivacy()
+
+-- Community links. No URLs are invented; configure them at the bottom.
+local credits=rounded(ui("Frame",side,{
+    Size=UDim2.new(1,-20,0,111),Position=UDim2.new(0,10,1,-194),
+    BackgroundColor3=C.card,BorderSizePixel=0
+}),9)
+stroke(credits,C.line,0.2)
+local creditsHeading=label(credits,"//  CREDITS",UDim2.new(1,-16,0,18),UDim2.fromOffset(8,4),10)
+creditsHeading.TextColor3=C.red
+local developerLabel=label(credits,"Developed by "..tostring(options.Developer or "mrpopsicle12"),UDim2.new(1,-16,0,17),UDim2.fromOffset(8,21),9)
+developerLabel.TextTruncate=Enum.TextTruncate.AtEnd
+local linkOverlay=ui("Frame",window,{Size=UDim2.fromScale(1,1),BackgroundColor3=C.bg,BackgroundTransparency=0.2,BorderSizePixel=0,Visible=false,ZIndex=50,Active=true})
+rounded(linkOverlay,12)
+local linkPanel=rounded(ui("Frame",linkOverlay,{Size=UDim2.fromOffset(400,174),AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),BackgroundColor3=C.card,BorderSizePixel=0,ZIndex=51}),12)
+stroke(linkPanel,C.red,0.15)
+local linkHeading=label(linkPanel,"COMMUNITY",UDim2.new(1,-60,0,28),UDim2.fromOffset(16,10),17)
+linkHeading.ZIndex=52
+local linkClose=button(linkPanel,"X",UDim2.fromOffset(26,26),UDim2.new(1,-38,0,10))
+linkClose.ZIndex=52
+local linkHelp=label(linkPanel,"",UDim2.new(1,-32,0,38),UDim2.fromOffset(16,44),11)
+linkHelp.TextWrapped=true
+linkHelp.TextColor3=C.muted
+linkHelp.ZIndex=52
+local linkBox=rounded(ui("TextBox",linkPanel,{Size=UDim2.new(1,-32,0,32),Position=UDim2.fromOffset(16,87),BackgroundColor3=C.deep,BorderSizePixel=0,TextColor3=C.white,Font=Enum.Font.Gotham,TextSize=12,ClearTextOnFocus=false,TextEditable=false,Text="",ZIndex=52}),7)
+local copyButton=button(linkPanel,"COPY LINK",UDim2.new(1,-32,0,32),UDim2.fromOffset(16,130))
+copyButton.BackgroundColor3=C.selected
+copyButton.ZIndex=52
+local currentLink=""
+local function closeLink()
+    linkBox:ReleaseFocus()
+    linkOverlay.Visible=false
+end
+on(linkClose.Activated,closeLink)
+on(window:GetPropertyChangedSignal("Visible"),function() if not window.Visible then closeLink() end end)
+local function showLink(name,url)
+    currentLink=type(url)=="string" and url or ""
+    local valid=currentLink:match("^https://%S+$")~=nil
+    if not valid then currentLink="" end
+    linkHeading.Text=name
+    linkHelp.Text=valid and "Copy this link and open it in your browser or app." or "Community link not configured yet."
+    linkBox.Text=currentLink
+    linkBox.Visible=valid
+    copyButton.Visible=valid
+    copyButton.Text="COPY LINK"
+    linkOverlay.Visible=true
+end
+on(copyButton.Activated,function()
+    if currentLink=="" then return end
+    if type(setclipboard)=="function" then
+        local ok=pcall(setclipboard,currentLink)
+        if ok then copyButton.Text="COPIED";return end
+    end
+    -- Standard Roblox client: show the URL for manual copying instead.
+    linkBox.TextEditable=true
+    linkBox:CaptureFocus()
+    linkBox.CursorPosition=#currentLink+1
+    linkBox.SelectionStart=1
+    linkHelp.Text="Copy the selected link, then open it in your browser or app."
+end)
+on(linkBox.FocusLost,function() linkBox.Text=currentLink;linkBox.TextEditable=false end)
+local function communityButton(name,caption,url,y)
+    local b=button(credits,"",UDim2.new(1,-12,0,30),UDim2.fromOffset(6,y))
+    b.BackgroundColor3=C.deep
+    local t=label(b,name,UDim2.new(1,-48,0,15),UDim2.fromOffset(8,1),11)
+    local subtext=label(b,caption,UDim2.new(1,-48,0,12),UDim2.fromOffset(8,15),8)
+    subtext.TextColor3=C.muted
+    local arrow=label(b,">",UDim2.fromOffset(18,30),UDim2.new(1,-22,0,0),13)
+    arrow.TextColor3=C.red
+    on(b.Activated,function() showLink(name,url) end)
+end
+communityButton("Discord","Join community",options.DiscordURL,40)
+communityButton("TikTok","Follow creator",options.TikTokURL,74)
+
 local credit = label(
 side,
-"by mrpopsicle12",
+"by " .. tostring(options.Developer or "mrpopsicle12"),
 UDim2.fromOffset(165, 14),
 UDim2.new(0, 12, 1, -18),
 8
@@ -853,8 +955,10 @@ function Hub:Dashboard(tab)
     end
     local word=label(hero,"A G O N Y  /  C R I M S O N",UDim2.new(1,-24,0,17),UDim2.fromOffset(15,11),10)
     word.TextColor3=C.red
-    local welcome=label(hero,"Welcome, "..player.DisplayName,UDim2.new(1,-32,0,35),UDim2.fromOffset(15,29),23)
+    local welcome=label(hero,"",UDim2.new(1,-32,0,35),UDim2.fromOffset(15,29),23)
     welcome.TextTruncate=Enum.TextTruncate.AtEnd
+    table.insert(welcomeLabels,welcome)
+    refreshPrivacy()
     local tagline=label(hero,options.GameName or "Universal control center",UDim2.new(1,-32,0,22),UDim2.fromOffset(16,66),12)
     tagline.TextColor3=C.muted
     local marker=ui("Frame",hero,{Size=UDim2.fromOffset(72,3),Position=UDim2.fromOffset(16,96),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
@@ -868,10 +972,10 @@ function Hub:Dashboard(tab)
         local t=label(f,name,UDim2.new(1,-16,0,20),UDim2.fromOffset(10,6),10);t.TextColor3=C.muted
         local val=label(f,"--",UDim2.new(1,-16,0,30),UDim2.fromOffset(10,26),21);val.TextColor3=color;val.TextTruncate=Enum.TextTruncate.AtEnd
         local foot=label(f,caption,UDim2.new(1,-16,0,16),UDim2.fromOffset(10,59),10);foot.TextColor3=C.muted
-        return val
+        return val,foot
     end
-    local fps=metric(1,"FRAME RATE","FPS",C.red)
-    local ping=metric(2,"LATENCY","milliseconds",C.amber)
+    local fps,fpsRating=metric(1,"FPS","MEASURING...",C.red)
+    local ping,pingRating=metric(2,"PING","MEASURING...",C.amber)
     local count=metric(3,"SERVER","players",C.green)
     local elapsed=metric(4,"SESSION","hub uptime",C.white)
     Hub:Section(tab,"QUICK NAVIGATION")
@@ -892,14 +996,32 @@ function Hub:Dashboard(tab)
         local currentFPS=math.floor(frames/seconds+0.5);frames,seconds=0,0
         if not window.Visible or not page.Visible then return end
         fps.Text=tostring(currentFPS)
-        fps.TextColor3=currentFPS>=50 and C.green or (currentFPS>=30 and C.amber or C.red)
+        local function rate(valueLabel,ratingLabel,rating,color)
+            valueLabel.TextColor3=color
+            ratingLabel.TextColor3=color
+            ratingLabel.Text=rating
+        end
+        if currentFPS>=60 then rate(fps,fpsRating,"EXCELLENT",C.green)
+        elseif currentFPS>=45 then rate(fps,fpsRating,"GOOD",C.green)
+        elseif currentFPS>=30 then rate(fps,fpsRating,"FAIR",C.amber)
+        else rate(fps,fpsRating,"POOR",C.red) end
         local ok,ms=pcall(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
-        ping.Text=ok and type(ms)=="number" and tostring(math.floor(ms+0.5)) or "N/A"
+        if ok and type(ms)=="number" and ms>=0 and ms<math.huge then
+            ping.Text=tostring(math.floor(ms+0.5)).." ms"
+            if ms<=50 then rate(ping,pingRating,"EXCELLENT",C.green)
+            elseif ms<=100 then rate(ping,pingRating,"GOOD",C.green)
+            elseif ms<=150 then rate(ping,pingRating,"FAIR",C.amber)
+            else rate(ping,pingRating,"POOR",C.red) end
+        else
+            ping.Text="N/A"
+            rate(ping,pingRating,"UNAVAILABLE",C.muted)
+        end
         count.Text=tostring(#Players:GetPlayers()).."/"..tostring(Players.MaxPlayers)
         local t=math.floor(os.clock()-started)
         elapsed.Text=string.format("%02d:%02d",math.floor(t/60),t%60)
     end)
 end
+Hub.Home = Hub.Dashboard
 Hub.Pages = pages
 Hub.Theme = C
 local duration = math.max(0, tonumber(options.LoadingTime) or 10)
@@ -932,15 +1054,19 @@ end)()
 
 -- EDIT ONLY THIS SECTION FOR EACH GAME.
 local Hub = AgonyUI.Create({
-    Version = "CRIMSON 1.0",
+    Version = "CRIMSON 1.1",
+    Developer = "mrpopsicle12",
+    HideUsername = true,
+    DiscordURL = "", -- paste your exact Discord invite URL
+    TikTokURL = "", -- paste your exact TikTok profile URL
     GameName = "Universal control center",
-    Tabs = {"Dashboard", "Main", "Farm", "Settings"},
-    Descriptions = {Dashboard = "Your session at a glance", Main = "Main features", Farm = "Game features", Settings = "Preferences"},
+    Tabs = {"Home", "Main", "Farm", "Settings"},
+    Descriptions = {Home = "Your session at a glance", Main = "Main features", Farm = "Game features", Settings = "Preferences"},
     OpenOnLoad = true,
     LoadingTime = 10,
     -- Logo = 123456789, -- optional Roblox image asset ID
 })
-Hub:Dashboard("Dashboard")
+Hub:Dashboard("Home")
 Hub:Section("Main", "Features")
 Hub:Toggle("Main", "Example Toggle", false, function(enabled)
     print("Toggle:", enabled)
