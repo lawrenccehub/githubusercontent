@@ -1,0 +1,960 @@
+local AgonyUI = (function()
+-- AGONY HUB / CRIMSON | standalone client UI
+-- UI only; standard Roblox client / ModuleScript. No game-specific logic.
+local Library = {}
+function Library.Create(options)
+options = options or {}
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local Run = game:GetService("RunService")
+local Tween = game:GetService("TweenService")
+local Stats = game:GetService("Stats")
+local player = Players.LocalPlayer
+assert(player, "Agony UI must run on the client")
+local pg = player:WaitForChild("PlayerGui")
+local alive = true
+local conns = {}
+local Hub = {}
+local function on(signal, handler)
+local c = signal:Connect(handler)
+table.insert(conns, c)
+return c
+end
+local pageOrders = {}
+local function ui(class, parent, props)
+local x = Instance.new(class)
+for k, v in pairs(props or {}) do
+x[k] = v
+end
+if parent and pageOrders[parent] and x:IsA("GuiObject") then
+    pageOrders[parent] = pageOrders[parent] + 1
+    x.LayoutOrder = pageOrders[parent]
+end
+x.Parent = parent
+return x
+end
+local function rounded(x, r)
+ui("UICorner", x, {
+CornerRadius = UDim.new(0, r or 8)
+})
+return x
+end
+local C = {
+    bg = Color3.fromRGB(15, 12, 17),
+    side = Color3.fromRGB(25, 17, 23),
+    card = Color3.fromRGB(34, 24, 31),
+    selected = Color3.fromRGB(86, 25, 40),
+    blue = Color3.fromRGB(255, 72, 91), -- legacy accent alias
+    white = Color3.fromRGB(255, 241, 245),
+    muted = Color3.fromRGB(168, 144, 155),
+    red = Color3.fromRGB(255, 53, 78),
+    green = Color3.fromRGB(79, 221, 161),
+    amber = Color3.fromRGB(255, 172, 93),
+    line = Color3.fromRGB(78, 39, 49),
+    deep = Color3.fromRGB(19, 14, 21)
+}
+local function stroke(parent, color, transparency, thickness)
+    return ui("UIStroke", parent, {Color = color or C.line,
+        Transparency = transparency or 0, Thickness = thickness or 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border})
+end
+local function gradient(parent, first, last, rotation)
+    return ui("UIGradient", parent, {Color = ColorSequence.new(first,last), Rotation = rotation or 0})
+end
+local function animate(instance, properties, duration)
+    Tween:Create(instance, TweenInfo.new(duration or 0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), properties):Play()
+end
+local function label(parent, str, size, pos, font)
+return ui("TextLabel", parent, {
+Text = str,
+Size = size,
+Position = pos or UDim2.new(),
+BackgroundTransparency = 1,
+TextColor3 = C.white,
+Font = Enum.Font.GothamBold,
+TextSize = font or 12,
+TextXAlignment = Enum.TextXAlignment.Left
+})
+end
+local function button(parent, str, size, pos)
+return rounded(ui("TextButton", parent, {
+Text = str,
+Size = size,
+Position = pos or UDim2.new(),
+BackgroundColor3 = C.card,
+BorderSizePixel = 0,
+TextColor3 = C.white,
+Font = Enum.Font.GothamMedium,
+TextSize = 12,
+AutoButtonColor = false
+}), 8)
+end
+local screen = ui("ScreenGui", nil, {
+Name = "AgonyHubV118",
+ResetOnSpawn = false,
+IgnoreGuiInset = true,
+DisplayOrder = 2147483646,
+ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+})
+local floating = ui("ScreenGui", nil, {
+Name = "AgonyFloatingGUI",
+ResetOnSpawn = false,
+IgnoreGuiInset = true,
+DisplayOrder = 2147483647,
+ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+})
+screen.Name = options.Id or "AgonyHubUI"
+floating.Name = screen.Name .. "Floating"
+screen.Parent = pg
+floating.Parent = pg
+local loading = rounded(ui("Frame", screen, {
+Size = UDim2.fromOffset(350, 190),
+AnchorPoint = Vector2.new(0.5, 0.5),
+Position = UDim2.fromScale(0.5, 0.5),
+BackgroundColor3 = C.bg,
+BorderSizePixel = 0,
+ZIndex = 90
+}), 14)
+ui("UIStroke", loading, {
+Color = C.blue,
+Thickness = 1.4
+})
+-- Show the original loading screen first. The main GUI stays closed.
+-- Reveal only the floating open/close icon after the progress reaches 100%.
+loading.Visible = true
+local loadingScale = ui("UIScale", loading, {
+Scale = 1
+})
+local logoLoading = rounded(ui(
+"ImageLabel",
+loading,
+{
+Size = UDim2.fromOffset(54, 54),
+Position = UDim2.fromOffset(18, 20),
+BackgroundColor3 = C.side,
+Image = "",
+ScaleType = Enum.ScaleType.Fit,
+ZIndex = 92
+}
+), 10)
+gradient(loading, Color3.fromRGB(51,22,32), C.bg, 35)
+loading.BackgroundColor3 = Color3.new(1,1,1)
+local fallbackLoading = label(
+logoLoading,
+"AG",
+UDim2.fromScale(1, 1),
+nil,
+18
+)
+fallbackLoading.TextXAlignment =
+Enum.TextXAlignment.Center
+fallbackLoading.TextYAlignment =
+Enum.TextYAlignment.Center
+local loadTitle = label(
+loading,
+"AGONY HUB",
+UDim2.fromOffset(260, 38),
+UDim2.fromOffset(86, 23),
+25
+)
+loadTitle.TextColor3 = C.red
+loadTitle.TextStrokeColor3 = C.red
+loadTitle.TextStrokeTransparency = 0.2
+local loadGlow = ui("UIStroke", loadTitle, {
+Color = C.red,
+Thickness = 1.6,
+Transparency = 0.2
+})
+local loadCredit = label(
+loading,
+"by mrpopsicle12",
+UDim2.fromOffset(240, 20),
+UDim2.fromOffset(88, 62),
+12
+)
+loadCredit.TextColor3 = C.muted
+local barTrack = rounded(ui("Frame", loading, {
+Size = UDim2.new(1, -36, 0, 8),
+Position = UDim2.fromOffset(18, 122),
+BackgroundColor3 = C.card,
+BorderSizePixel = 0
+}), 6)
+local barFill = rounded(ui("Frame", barTrack, {
+Size = UDim2.fromScale(0, 1),
+BackgroundColor3 = C.blue,
+BorderSizePixel = 0
+}), 6)
+local barLabel = label(
+loading,
+"Loading... 0%",
+UDim2.new(1, -36, 0, 22),
+UDim2.fromOffset(18, 143),
+12
+)
+barLabel.TextXAlignment =
+Enum.TextXAlignment.Center
+barLabel.TextColor3 = C.muted
+local window = rounded(ui("Frame", screen, {
+Size = UDim2.fromOffset(790, 470),
+AnchorPoint = Vector2.new(0.5, 0.5),
+Position = UDim2.fromScale(0.5, 0.5),
+BackgroundColor3 = C.bg,
+BorderSizePixel = 0,
+Visible = false
+}), 12)
+local shellStroke = stroke(window, C.red, 0.28, 1.5)
+local scale = ui("UIScale", window, {
+Scale = 1
+})
+local function resize()
+local cam = workspace.CurrentCamera
+if not cam then
+return
+end
+local v = cam.ViewportSize
+-- Prefer the actual full-screen UI resolution when available.
+local ok, resolution = pcall(function()
+    return game:GetService("GuiService"):GetScreenResolution()
+end)
+if ok and typeof(resolution) == "Vector2"
+    and resolution.X >= v.X * 1.15 and resolution.Y >= v.Y * 1.15 then
+    v = resolution
+end
+local preferredScale = math.min((v.X - 20) / 790, (v.Y - 20) / 470)
+scale.Scale = math.clamp(preferredScale, 0.1, 1)
+if loading.Parent then
+loadingScale.Scale = math.clamp(
+math.min(
+(v.X - 20) / 350,
+(v.Y - 20) / 190
+),
+0.45,
+1
+)
+end
+end
+resize()
+local side = rounded(ui("Frame", window, {
+Size = UDim2.new(0, 188, 1, 0),
+BackgroundColor3 = C.side,
+BorderSizePixel = 0
+}), 12)
+gradient(side, Color3.fromRGB(39,21,29), C.deep, 90)
+-- UIGradient multiplies the base color, so use a white canvas.
+side.BackgroundColor3 = Color3.new(1,1,1)
+local sideLogo = rounded(ui(
+"ImageLabel",
+side,
+{
+Size = UDim2.fromOffset(43, 43),
+Position = UDim2.fromOffset(12, 14),
+BackgroundColor3 = C.card,
+Image = "",
+ScaleType = Enum.ScaleType.Fit
+}
+), 8)
+local fallbackSide = label(
+sideLogo,
+"AG",
+UDim2.fromScale(1, 1),
+nil,
+14
+)
+fallbackSide.TextXAlignment =
+Enum.TextXAlignment.Center
+fallbackSide.TextYAlignment =
+Enum.TextYAlignment.Center
+local title = label(
+side,
+"AGONY HUB",
+UDim2.fromOffset(125, 25),
+UDim2.fromOffset(63, 13),
+16
+)
+title.TextColor3 = C.red
+title.TextStrokeColor3 = C.red
+title.TextStrokeTransparency = 0.25
+local titleGlow = ui("UIStroke", title, {
+Color = C.red,
+Thickness = 1.2,
+Transparency = 0.15
+})
+local version = label(
+side,
+tostring(options.Version or "1.0.0"),
+UDim2.fromOffset(120, 16),
+UDim2.fromOffset(63, 36),
+10
+)
+version.TextColor3 = C.blue
+stroke(sideLogo, C.red, 0.2)
+local navCaption = label(side, "  //  NAVIGATION", UDim2.fromOffset(164, 20), UDim2.fromOffset(12, 65), 10)
+navCaption.TextColor3 = C.muted
+local tabs, tabDecor = {}, {}
+local names = options.Tabs or {"Main", "Settings"}
+assert(#names > 0, "At least one tab is required")
+local desc = options.Descriptions or {}
+do
+local tabScroll = ui("ScrollingFrame", side, {
+Name = "AgonyTabScroll",
+Active = true,
+ScrollingEnabled = true,
+Size = UDim2.new(1, -20, 1, -181),
+Position = UDim2.fromOffset(10, 92),
+BackgroundTransparency = 1,
+BorderSizePixel = 0,
+ScrollBarThickness = 3,
+ScrollingDirection = Enum.ScrollingDirection.Y,
+CanvasSize = UDim2.fromOffset(0, 0)
+})
+local tabLayout = ui("UIListLayout", tabScroll, {
+SortOrder = Enum.SortOrder.LayoutOrder,
+Padding = UDim.new(0, 5)
+})
+on(tabLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+tabScroll.CanvasSize = UDim2.fromOffset(0, tabLayout.AbsoluteContentSize.Y + 8)
+end)
+for i, name in ipairs(names) do
+assert(type(name) == "string" and not tabs[name], "Tab names must be unique strings")
+local b = button(tabScroll, "", UDim2.new(1, -5, 0, 39))
+b.LayoutOrder = i
+local index = label(b, string.format("%02d", i), UDim2.fromOffset(29,39), UDim2.fromOffset(10,0), 11)
+index.TextColor3 = C.muted
+local text = label(b, name, UDim2.new(1,-57,1,0), UDim2.fromOffset(40,0), 13)
+text.TextTruncate = Enum.TextTruncate.AtEnd
+local rail = rounded(ui("Frame",b,{Size=UDim2.fromOffset(3,23),Position=UDim2.fromOffset(0,8),BackgroundColor3=C.red,BorderSizePixel=0,Visible=false}),2)
+local arrow = label(b, ">", UDim2.fromOffset(13,39), UDim2.new(1,-17,0,0),12)
+arrow.TextColor3 = C.muted
+local outline = stroke(b,C.line,0.65)
+tabs[name] = b
+tabDecor[name] = {rail=rail,index=index,arrow=arrow,outline=outline,text=text}
+on(b.MouseEnter,function() if not rail.Visible then animate(b,{BackgroundColor3=C.selected:Lerp(C.card,0.55)}) end end)
+on(b.MouseLeave,function() if not rail.Visible then animate(b,{BackgroundColor3=C.card}) end end)
+end
+end
+local profile = rounded(ui("Frame", side, {
+Size = UDim2.new(1, -20, 0, 51),
+Position = UDim2.new(0, 10, 1, -75),
+BackgroundColor3 = C.card,
+BorderSizePixel = 0
+}), 8)
+local avatar = rounded(ui("ImageLabel", profile, {
+Size = UDim2.fromOffset(36, 36),
+Position = UDim2.fromOffset(7, 7),
+BackgroundTransparency = 1
+}), 17)
+local username = label(
+profile,
+"@" .. player.Name,
+UDim2.new(1, -53, 0, 23),
+UDim2.fromOffset(49, 5),
+11
+)
+username.TextTruncate =
+Enum.TextTruncate.AtEnd
+username.TextYAlignment =
+Enum.TextYAlignment.Center
+local profileCaption = label(profile, "LOCAL PLAYER", UDim2.new(1,-53,0,16), UDim2.fromOffset(49,27),9)
+profileCaption.TextColor3 = C.red
+stroke(profile,C.line,0.15)
+local credit = label(
+side,
+"by mrpopsicle12",
+UDim2.fromOffset(165, 14),
+UDim2.new(0, 12, 1, -18),
+8
+)
+credit.TextColor3 = C.muted
+task.spawn(function()
+local ok, image = pcall(function()
+return Players:GetUserThumbnailAsync(
+player.UserId,
+Enum.ThumbnailType.HeadShot,
+Enum.ThumbnailSize.Size150x150
+)
+end)
+if ok and alive and avatar.Parent then
+avatar.Image = image
+end
+end)
+local content = ui("Frame", window, {
+Size = UDim2.new(1, -188, 1, 0),
+Position = UDim2.fromOffset(188, 0),
+BackgroundTransparency = 1
+})
+local heading = label(
+content,
+"Main",
+UDim2.fromOffset(370, 30),
+UDim2.fromOffset(17, 12),
+22
+)
+local sub = label(
+content,
+"",
+UDim2.fromOffset(420, 18),
+UDim2.fromOffset(18, 41),
+11
+)
+sub.TextColor3 = C.muted
+sub.TextTruncate = Enum.TextTruncate.AtEnd
+local close = button(
+content,
+"X",
+UDim2.fromOffset(27, 27),
+UDim2.new(1, -37, 0, 9)
+)
+close.ZIndex = 10
+close.BackgroundColor3 = C.selected
+stroke(close,C.red,0.45)
+local topLine = ui("Frame",content,{Size=UDim2.new(1,-32,0,2),Position=UDim2.fromOffset(16,65),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
+gradient(topLine,C.red,C.bg,0)
+local pages = {}
+for _, name in ipairs(names) do
+local p = ui("ScrollingFrame", content, {
+Active = true,
+ScrollingEnabled = true,
+ScrollingDirection = Enum.ScrollingDirection.Y,
+Size = UDim2.new(1, -32, 1, -88),
+Position = UDim2.fromOffset(16, 76),
+BackgroundTransparency = 1,
+BorderSizePixel = 0,
+ScrollBarThickness = 3,
+CanvasSize = UDim2.fromOffset(0, 0),
+Visible = false
+})
+local layout = ui("UIListLayout", p, {
+Padding = UDim.new(0, 8),
+SortOrder = Enum.SortOrder.LayoutOrder
+})
+on(
+layout:GetPropertyChangedSignal(
+"AbsoluteContentSize"
+),
+function()
+p.CanvasSize = UDim2.fromOffset(
+0,
+layout.AbsoluteContentSize.Y + 12
+)
+end
+)
+pages[name] = p
+pageOrders[p] = 0
+end
+local function card(page, str)
+local frame = rounded(ui("Frame", page, {
+Size = UDim2.new(1, -5, 0, 49),
+BackgroundColor3 = C.card,
+BorderSizePixel = 0
+}), 8)
+local t = label(
+frame,
+str,
+UDim2.new(1, -193, 1, 0),
+UDim2.fromOffset(17, 0),
+13
+)
+t.TextYAlignment = Enum.TextYAlignment.Center
+ t.TextTruncate = Enum.TextTruncate.AtEnd
+ stroke(frame,C.line,0.32)
+ local accent = rounded(ui("Frame",frame,{Size=UDim2.fromOffset(3,25),Position=UDim2.fromOffset(5,12),BackgroundColor3=C.red,BackgroundTransparency=0.35,BorderSizePixel=0}),2)
+ return frame
+end
+local function rightButton(parent, str)
+local b = button(
+parent,
+str,
+UDim2.fromOffset(150, 30),
+UDim2.new(1, -161, 0.5, -15)
+)
+b.BackgroundColor3 = C.selected
+stroke(b,C.red,0.55)
+return b
+end
+local function toggle(frame, fn)
+    local state, busy = false, false
+    local b = button(frame,"",UDim2.fromOffset(50,26),UDim2.new(1,-62,0.5,-13))
+    b.BackgroundColor3=C.deep
+    local outline=stroke(b,C.line,0.1)
+    local knob=rounded(ui("Frame",b,{Size=UDim2.fromOffset(18,18),Position=UDim2.fromOffset(4,4),BackgroundColor3=C.muted,BorderSizePixel=0}),9)
+    local stateText=label(frame,"OFF",UDim2.fromOffset(35,26),UDim2.new(1,-103,0.5,-13),10)
+    stateText.TextColor3=C.muted
+    local function paint(v)
+        stateText.Text=v and "ON" or "OFF"
+        stateText.TextColor3=v and C.red or C.muted
+        animate(b,{BackgroundColor3=v and C.selected or C.deep})
+        animate(knob,{Position=UDim2.fromOffset(v and 28 or 4,4),BackgroundColor3=v and C.red or C.muted})
+        animate(outline,{Color=v and C.red or C.line})
+    end
+    local function set(v)
+        v=v==true
+        if busy or v==state then return end
+        busy=true
+        state=v
+        paint(v)
+        local ok,err=pcall(fn,v)
+        if not ok then warn("[AGONY TOGGLE]",err); state=not v; paint(state) end
+        busy=false
+    end
+    on(b.Activated,function() set(not state) end)
+    return set
+end
+local function status(page, name)
+local r = card(page, name)
+local t = label(
+r,
+"Not Available",
+UDim2.fromOffset(122, 27),
+UDim2.new(1, -128, 0.5, -14),
+9
+)
+t.TextYAlignment =
+Enum.TextYAlignment.Center
+t.TextTruncate =
+Enum.TextTruncate.AtEnd
+return t
+end
+local menuFrames = {}
+local function hideMenus()
+for _, m in ipairs(menuFrames) do
+m.Visible = false
+end
+end
+for _, page in pairs(pages) do
+    on(page:GetPropertyChangedSignal("CanvasPosition"), hideMenus)
+    on(page:GetPropertyChangedSignal("Visible"), hideMenus)
+end
+-- Sidebar scroll was local to its creation block; never access it as a global.
+do
+    local sidebarScroll = side:FindFirstChild("AgonyTabScroll")
+    if sidebarScroll and sidebarScroll:IsA("ScrollingFrame") then
+        on(sidebarScroll:GetPropertyChangedSignal("CanvasPosition"), hideMenus)
+    end
+end
+local function dropdown(anchor, options, fn, keepOpen)
+local h = math.min(
+#options * 34 + 8,
+130
+)
+local m = rounded(ui(
+"ScrollingFrame",
+content,
+{
+Size = UDim2.fromOffset(165, h),
+BackgroundColor3 = C.side,
+BorderSizePixel = 0,
+Visible = false,
+ZIndex = 20,
+ScrollBarThickness = 3,
+CanvasSize = UDim2.fromOffset(
+0,
+#options * 34 + 8
+)
+}
+), 8)
+table.insert(menuFrames, m)
+local optionButtons = {}
+for i, entry in ipairs(options) do
+local b = button(
+m,
+entry.label,
+UDim2.fromOffset(150, 30),
+UDim2.fromOffset(
+5,
+4 + (i - 1) * 34
+)
+)
+b.ZIndex = 21
+if entry.value~=nil then optionButtons[entry.value] = b end
+on(b.Activated, function()
+if not keepOpen then hideMenus() end
+fn(
+entry.value,
+entry.label
+)
+end)
+end
+on(anchor.Activated, function()
+local show = not m.Visible
+hideMenus()
+if not show then
+return
+end
+local factor = scale.Scale
+if factor <= 0 then return end
+local p = anchor.AbsolutePosition - content.AbsolutePosition
+local width, height = content.AbsoluteSize.X / factor, content.AbsoluteSize.Y / factor
+local top, bottom = 76, height - 8
+local page = anchor:FindFirstAncestorWhichIsA("ScrollingFrame")
+if page and page:IsDescendantOf(content) then
+    local offset = (page.AbsolutePosition.Y - content.AbsolutePosition.Y) / factor
+    top = math.max(top, offset)
+    bottom = math.min(bottom, offset + page.AbsoluteSize.Y / factor)
+end
+local aTop, aBottom = p.Y / factor, (p.Y + anchor.AbsoluteSize.Y) / factor
+if aBottom <= top or aTop >= bottom then return end
+local below, above = math.max(0, bottom-aBottom), math.max(0, aTop-top)
+local useBelow = below >= h or below >= above
+local available = useBelow and below or above
+local actualH = math.min(h, math.max(0, available))
+if actualH < 36 then return end
+local x = math.clamp(p.X/factor, 0, math.max(0,width-165-6))
+local y = useBelow and aBottom or aTop-actualH
+m.Size = UDim2.fromOffset(165, actualH)
+m.Position = UDim2.fromOffset(x, math.clamp(y,top,math.max(top,bottom-actualH)))
+m.CanvasPosition = Vector2.zero
+m.Visible = true
+end)
+return optionButtons
+end
+local function showPage(name)
+assert(pages[name], "Unknown tab: " .. tostring(name))
+hideMenus()
+for n, p in pairs(pages) do
+p.Visible = n == name
+local active = n == name
+local decor=tabDecor[n]
+decor.rail.Visible=active
+animate(tabs[n],{BackgroundColor3=active and C.selected or C.card})
+animate(decor.outline,{Color=active and C.red or C.line,Transparency=active and 0.12 or 0.65})
+decor.index.TextColor3=active and C.red or C.muted
+decor.arrow.TextColor3=active and C.red or C.muted
+end
+heading.Text = name
+sub.Text = desc[name] or ""
+end
+for name, b in pairs(tabs) do
+on(b.Activated, function()
+showPage(name)
+end)
+end
+showPage(names[1])
+local function draggable(target, handle, scaled)
+local moving = false
+local inputRef
+local start
+local origin
+local moved = false
+on(handle.InputBegan, function(input)
+if input.UserInputType ==
+Enum.UserInputType.MouseButton1
+or input.UserInputType ==
+Enum.UserInputType.Touch then
+moving = true
+inputRef = input
+start = input.Position
+origin = target.Position
+moved = false
+end
+end)
+on(UIS.InputChanged, function(input)
+if not moving or not start then
+return
+end
+if input.UserInputType ~=
+Enum.UserInputType.MouseMovement
+and input ~= inputRef then
+return
+end
+local d = input.Position - start
+if d.Magnitude > 6 then
+moved = true
+end
+local f = scaled and scale.Scale or 1
+target.Position = UDim2.new(
+origin.X.Scale,
+origin.X.Offset + d.X / f,
+origin.Y.Scale,
+origin.Y.Offset + d.Y / f
+)
+end)
+on(UIS.InputEnded, function(input)
+if input == inputRef or (inputRef and input.UserInputType == Enum.UserInputType.MouseButton1 and inputRef.UserInputType == Enum.UserInputType.MouseButton1) then
+moving = false
+inputRef = nil
+end
+end)
+return function()
+return moved
+end
+end
+local dragBar = ui("TextButton", content, {
+Size = UDim2.new(1, -100, 0, 65),
+BackgroundTransparency = 1,
+Text = "",
+ZIndex = 3
+})
+draggable(window, dragBar, false)
+local float = rounded(ui(
+"ImageButton",
+floating,
+{
+Size = UDim2.fromOffset(56, 56),
+Position = UDim2.new(0, 20, 0.5, -28),
+BackgroundColor3 = C.selected,
+BorderSizePixel = 0,
+Image = "",
+ScaleType = Enum.ScaleType.Fit,
+Visible = false
+}
+), 12)
+ui("UIStroke", float, {
+Color = C.blue,
+Thickness = 1.5
+})
+local fallbackFloat = label(
+float,
+"AG",
+UDim2.fromScale(1, 1),
+nil,
+16
+)
+fallbackFloat.TextColor3 = C.white
+gradient(float, Color3.fromRGB(255,80,103), Color3.fromRGB(120,32,56), 45)
+float.BackgroundColor3 = Color3.new(1,1,1)
+fallbackFloat.TextXAlignment =
+Enum.TextXAlignment.Center
+fallbackFloat.TextYAlignment =
+Enum.TextYAlignment.Center
+local movedFloat = draggable(
+float,
+float,
+false
+)
+on(float.Activated, function()
+if not movedFloat() then
+window.Visible = not window.Visible
+end
+end)
+on(close.Activated, function()
+window.Visible = false
+end)
+do
+    local glowClock = 0
+    local glowAccum = 0
+    on(Run.Heartbeat, function(dt)
+        if not alive then return end
+        glowClock = glowClock + dt
+        glowAccum = glowAccum + dt
+        if glowAccum < 0.075 then return end
+        glowAccum = 0
+        local pulse = (math.sin(glowClock * 3) + 1) * 0.5
+        local color = Color3.fromRGB(255,
+            math.floor(35 + 65 * pulse),
+            math.floor(48 + 65 * pulse))
+        local transparency = 0.08 + 0.62 * (1 - pulse)
+        if title.Parent then
+            title.TextColor3 = color
+            titleGlow.Transparency = transparency
+            shellStroke.Transparency = 0.24 + 0.32 * (1-pulse)
+        end
+        if loadTitle.Parent and loading.Parent then
+            loadTitle.TextColor3 = color
+            loadGlow.Transparency = transparency
+        end
+    end)
+end
+
+-- Supply a Roblox image asset ID or URI; otherwise keep the original AG fallback.
+local logo = options.Logo
+if type(logo) == "number" then logo = "rbxassetid://" .. tostring(logo) end
+if type(logo) == "string" and logo ~= "" then
+    for _, pair in ipairs({{logoLoading, fallbackLoading}, {sideLogo, fallbackSide}, {float, fallbackFloat}}) do
+        pair[1].Image = logo
+        pair[2].Visible = false
+    end
+end
+on(window:GetPropertyChangedSignal("Visible"), hideMenus)
+local cameraConnection
+local function bindCamera()
+    if cameraConnection then cameraConnection:Disconnect() end
+    local camera = workspace.CurrentCamera
+    if camera then cameraConnection = on(camera:GetPropertyChangedSignal("ViewportSize"), resize) end
+    resize()
+end
+on(workspace:GetPropertyChangedSignal("CurrentCamera"), bindCamera)
+bindCamera()
+local function call(fn, ...)
+    if type(fn) ~= "function" then return end
+    local ok, err = pcall(fn, ...)
+    if not ok then warn("[AGONY UI]", err) end
+end
+local function pageFor(name)
+    assert(alive, "UI destroyed")
+    return assert(pages[name], "Unknown tab: " .. tostring(name))
+end
+function Hub:Toggle(tab, name, default, callback)
+    local set = toggle(card(pageFor(tab), name), callback or function() end)
+    if default == true then set(true) end
+    return set
+end
+function Hub:Button(tab, name, text, callback)
+    local b = rightButton(card(pageFor(tab), name), text or "RUN")
+    on(b.Activated, function() call(callback) end)
+    return b
+end
+function Hub:Dropdown(tab, name, values, default, callback)
+    local entries = {}
+    for _, value in ipairs(values) do
+        table.insert(entries, {label = tostring(value), value = value})
+    end
+    local selected = default or values[1]
+    local b = rightButton(card(pageFor(tab), name), tostring(selected or "SELECT"))
+    dropdown(b, entries, function(value, text)
+        selected = value
+        b.Text = text
+        call(callback, value)
+    end)
+    return function() return selected end
+end
+function Hub:Textbox(tab, name, placeholder, default, callback)
+    local box = rounded(ui("TextBox", card(pageFor(tab), name), {
+        Size = UDim2.fromOffset(150, 30),
+        Position = UDim2.new(1, -161, 0.5, -15),
+        BackgroundColor3 = C.side, BorderSizePixel = 0,
+        TextColor3 = C.white, PlaceholderText = placeholder or "Enter text",
+        Text = tostring(default or ""), ClearTextOnFocus = false,
+        Font = Enum.Font.Gotham, TextSize = 10
+    }), 8)
+    on(box.FocusLost, function(enterPressed) call(callback, box.Text, enterPressed) end)
+    return box
+end
+function Hub:Label(tab, name, value)
+    local t = status(pageFor(tab), name)
+    t.Text = tostring(value or "")
+    return t
+end
+function Hub:Section(tab, name)
+    local f=ui("Frame",pageFor(tab),{Size=UDim2.new(1,-5,0,29),BackgroundTransparency=1})
+    local t=label(f,"//  "..name,UDim2.new(1,-12,1,0),UDim2.fromOffset(8,0),12)
+    t.TextColor3=C.red
+    return t
+end
+function Hub:ShowTab(name) showPage(name) end
+function Hub:SetVisible(value)
+    if not alive then return end
+    if float.Visible then window.Visible = value == true end
+end
+function Hub:Destroy()
+    if not alive then return end
+    alive = false
+    for _, connection in ipairs(conns) do connection:Disconnect() end
+    screen:Destroy()
+    floating:Destroy()
+end
+-- Live dashboard; metrics are local and no network requests are sent.
+function Hub:Dashboard(tab)
+    local page=pageFor(tab)
+    local hero=rounded(ui("Frame",page,{Size=UDim2.new(1,-5,0,110),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true}),12)
+    gradient(hero,Color3.fromRGB(79,19,34),Color3.fromRGB(25,16,24),18)
+    stroke(hero,C.red,0.35)
+    for i=1,4 do
+        rounded(ui("Frame",hero,{Size=UDim2.fromOffset(33,190),Position=UDim2.new(1,-12-i*36,0,-35),Rotation=28,BackgroundColor3=C.red,BackgroundTransparency=0.88,BorderSizePixel=0}),4)
+    end
+    local word=label(hero,"A G O N Y  /  C R I M S O N",UDim2.new(1,-24,0,17),UDim2.fromOffset(15,11),10)
+    word.TextColor3=C.red
+    local welcome=label(hero,"Welcome, "..player.DisplayName,UDim2.new(1,-32,0,35),UDim2.fromOffset(15,29),23)
+    welcome.TextTruncate=Enum.TextTruncate.AtEnd
+    local tagline=label(hero,options.GameName or "Universal control center",UDim2.new(1,-32,0,22),UDim2.fromOffset(16,66),12)
+    tagline.TextColor3=C.muted
+    local marker=ui("Frame",hero,{Size=UDim2.fromOffset(72,3),Position=UDim2.fromOffset(16,96),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
+    gradient(marker,C.red,C.amber)
+    Hub:Section(tab,"LIVE TELEMETRY")
+    local metrics=ui("Frame",page,{Size=UDim2.new(1,-5,0,86),BackgroundTransparency=1})
+    ui("UIListLayout",metrics,{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,8),SortOrder=Enum.SortOrder.LayoutOrder})
+    local function metric(index,name,caption,color)
+        local f=rounded(ui("Frame",metrics,{Size=UDim2.new(0.25,-6,1,0),LayoutOrder=index,BackgroundColor3=C.card,BorderSizePixel=0}),10)
+        stroke(f,color,0.55)
+        local t=label(f,name,UDim2.new(1,-16,0,20),UDim2.fromOffset(10,6),10);t.TextColor3=C.muted
+        local val=label(f,"--",UDim2.new(1,-16,0,30),UDim2.fromOffset(10,26),21);val.TextColor3=color;val.TextTruncate=Enum.TextTruncate.AtEnd
+        local foot=label(f,caption,UDim2.new(1,-16,0,16),UDim2.fromOffset(10,59),10);foot.TextColor3=C.muted
+        return val
+    end
+    local fps=metric(1,"FRAME RATE","FPS",C.red)
+    local ping=metric(2,"LATENCY","milliseconds",C.amber)
+    local count=metric(3,"SERVER","players",C.green)
+    local elapsed=metric(4,"SESSION","hub uptime",C.white)
+    Hub:Section(tab,"QUICK NAVIGATION")
+    local quick=ui("Frame",page,{Size=UDim2.new(1,-5,0,math.max(34,math.ceil(math.min(#names-1,4)/2)*40-6)),BackgroundTransparency=1})
+    ui("UIGridLayout",quick,{CellSize=UDim2.new(0.5,-4,0,34),CellPadding=UDim2.fromOffset(8,6),SortOrder=Enum.SortOrder.LayoutOrder})
+    local added=0
+    for _, name in ipairs(names) do
+        if name~=tab and added<4 then
+            added = added + 1
+            local b=button(quick,name.."  >",UDim2.new());b.LayoutOrder=added;stroke(b,C.line,0.25)
+            on(b.Activated,function() showPage(name) end)
+        end
+    end
+    local frames, seconds, started=0,0,os.clock()
+    on(Run.RenderStepped,function(dt)
+        frames = frames + 1;seconds = seconds + dt
+        if seconds<1 then return end
+        local currentFPS=math.floor(frames/seconds+0.5);frames,seconds=0,0
+        if not window.Visible or not page.Visible then return end
+        fps.Text=tostring(currentFPS)
+        fps.TextColor3=currentFPS>=50 and C.green or (currentFPS>=30 and C.amber or C.red)
+        local ok,ms=pcall(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
+        ping.Text=ok and type(ms)=="number" and tostring(math.floor(ms+0.5)) or "N/A"
+        count.Text=tostring(#Players:GetPlayers()).."/"..tostring(Players.MaxPlayers)
+        local t=math.floor(os.clock()-started)
+        elapsed.Text=string.format("%02d:%02d",math.floor(t/60),t%60)
+    end)
+end
+Hub.Pages = pages
+Hub.Theme = C
+local duration = math.max(0, tonumber(options.LoadingTime) or 10)
+local started = os.clock()
+local function finish()
+    if not alive then return end
+    loading:Destroy()
+    float.Visible = true
+    if options.OpenOnLoad then window.Visible = true end
+end
+if duration == 0 then
+    finish()
+else
+    task.spawn(function()
+        while alive do
+            local progress = math.clamp((os.clock() - started) / duration, 0, 1)
+            barFill.Size = UDim2.fromScale(progress, 1)
+            barLabel.Text = "Loading... " .. tostring(math.floor(progress * 100)) .. "%"
+            if progress >= 1 then break end
+            task.wait(0.05)
+        end
+        if alive then finish() end
+    end)
+end
+return Hub
+end
+return Library
+
+end)()
+
+-- EDIT ONLY THIS SECTION FOR EACH GAME.
+local Hub = AgonyUI.Create({
+    Version = "CRIMSON 1.0",
+    GameName = "Universal control center",
+    Tabs = {"Dashboard", "Main", "Farm", "Settings"},
+    Descriptions = {Dashboard = "Your session at a glance", Main = "Main features", Farm = "Game features", Settings = "Preferences"},
+    OpenOnLoad = true,
+    LoadingTime = 10,
+    -- Logo = 123456789, -- optional Roblox image asset ID
+})
+Hub:Dashboard("Dashboard")
+Hub:Section("Main", "Features")
+Hub:Toggle("Main", "Example Toggle", false, function(enabled)
+    print("Toggle:", enabled)
+end)
+Hub:Button("Main", "Example Button", "RUN", function()
+    print("Button clicked")
+end)
+Hub:Dropdown("Farm", "Select Mode", {"Normal", "Fast"}, "Normal", function(value)
+    print("Selected:", value)
+end)
+Hub:Textbox("Settings", "Example Input", "Enter text", "", function(value)
+    print("Input:", value)
+end)
+local status = Hub:Label("Settings", "Status", "Ready")
+Hub:Button("Settings", "Unload UI", "UNLOAD", function()
+    Hub:Destroy()
+end)
