@@ -350,17 +350,17 @@ tabScroll.CanvasSize = UDim2.fromOffset(0, tabLayout.AbsoluteContentSize.Y + 8)
 end)
 for i, name in ipairs(names) do
 assert(type(name) == "string" and not tabs[name], "Tab names must be unique strings")
-local b = button(tabScroll, "", UDim2.new(1, -5, 0, 39))
+local b = button(tabScroll, "", UDim2.new(1, -5, 0, 44))
 b.LayoutOrder = i
 local symbols={Home="⌂",Settings="⚙",Main="▦",Farm="◆",Egg="◇",Boss="✦",Trade="⇄",Event="★",Island="⌖"}
-local index = label(b, symbols[name] or string.format("%02d", i), UDim2.fromOffset(24,39), UDim2.fromOffset(9,0), 15)
+local index = label(b, symbols[name] or string.format("%02d", i), UDim2.fromOffset(34,44), UDim2.fromOffset(7,0), 25)
 index.TextXAlignment=Enum.TextXAlignment.Center
 index.TextColor3 = C.muted
-local tabIcon=addIcon(b,index, (options.TabIcons or {})[name],UDim2.fromOffset(20,20),UDim2.fromOffset(11,9))
-local text = label(b, name, UDim2.new(1,-57,1,0), UDim2.fromOffset(40,0), 13)
+local tabIcon=addIcon(b,index, (options.TabIcons or {})[name],UDim2.fromOffset(30,30),UDim2.fromOffset(9,7))
+local text = label(b, name, UDim2.new(1,-65,1,0), UDim2.fromOffset(48,0), 13)
 text.TextTruncate = Enum.TextTruncate.AtEnd
-local rail = rounded(ui("Frame",b,{Size=UDim2.fromOffset(3,23),Position=UDim2.fromOffset(0,8),BackgroundColor3=C.red,BorderSizePixel=0,Visible=false}),2)
-local arrow = label(b, ">", UDim2.fromOffset(13,39), UDim2.new(1,-17,0,0),12)
+local rail = rounded(ui("Frame",b,{Size=UDim2.fromOffset(3,28),Position=UDim2.fromOffset(0,8),BackgroundColor3=C.red,BorderSizePixel=0,Visible=false}),2)
+local arrow = label(b, ">", UDim2.fromOffset(13,44), UDim2.new(1,-17,0,0),12)
 arrow.TextColor3 = C.muted
 local outline = stroke(b,C.line,0.65)
 tabs[name] = b
@@ -380,12 +380,6 @@ profileTitle.TextColor3=C.red
 local avatar=rounded(ui("ImageLabel",profile,{
     Size=UDim2.fromOffset(76,76),Position=UDim2.fromOffset(12,42),BackgroundTransparency=1
 }),12)
-local privateAvatar=rounded(ui("Frame",profile,{
-    Size=UDim2.fromOffset(76,76),Position=UDim2.fromOffset(12,42),BackgroundColor3=C.selected,BorderSizePixel=0
-}),12)
-stroke(privateAvatar,C.red,0.35)
-local privateIcon=label(privateAvatar,"AG",UDim2.fromScale(1,1),nil,24)
-privateIcon.TextXAlignment=Enum.TextXAlignment.Center
 local username=label(profile,"********",UDim2.new(1,-112,0,28),UDim2.fromOffset(100,48),17)
 username.TextTruncate=Enum.TextTruncate.AtEnd
 local profileCaption=label(profile,"PRIVATE MODE",UDim2.new(1,-112,0,22),UDim2.fromOffset(100,77),11)
@@ -394,12 +388,12 @@ local privacyButton=button(profile,"SHOW",UDim2.fromOffset(65,28),UDim2.new(1,-7
 privacyButton.TextSize=11
 privacyButton.BackgroundColor3=C.selected
 stroke(privacyButton,C.red,0.45)
-local privacyHint=label(profile,"Identity controls  /  SHOW or HIDE",UDim2.new(1,-24,0,18),UDim2.fromOffset(12,139),11)
+local privacyHint=label(profile,"Username privacy  /  SHOW or HIDE",UDim2.new(1,-24,0,18),UDim2.fromOffset(12,139),11)
 privacyHint.TextColor3=C.muted
 local function refreshPrivacy()
     username.Text = identityHidden and "********" or ("@" .. player.Name)
-    avatar.Visible = not identityHidden
-    privateAvatar.Visible = identityHidden
+    -- Privacy masks names only; always keep the Roblox avatar visible.
+    avatar.Visible = true
     privacyButton.Text = identityHidden and "SHOW" or "HIDE"
     profileCaption.Text = identityHidden and "PRIVATE MODE" or "LOCAL PLAYER"
     for _, welcome in ipairs(welcomeLabels) do
@@ -477,9 +471,9 @@ local function communityButton(name,caption,url,y,accent,monogram)
     b.BackgroundColor3=C.deep
     stroke(b,C.line,0.45)
     local mark=rounded(ui("Frame",b,{Size=UDim2.fromOffset(32,32),Position=UDim2.fromOffset(6,6),BackgroundColor3=accent,BorderSizePixel=0}),6)
-    local letter=label(mark,monogram,UDim2.fromScale(1,1),nil,16)
+    local letter=label(mark,monogram,UDim2.fromScale(1,1),nil,22)
     letter.TextXAlignment=Enum.TextXAlignment.Center
-    addIcon(mark,letter,(options.CommunityIcons or {})[name],UDim2.new(1,-8,1,-8),UDim2.fromOffset(4,4))
+    addIcon(mark,letter,(options.CommunityIcons or {})[name],UDim2.new(1,-4,1,-4),UDim2.fromOffset(2,2))
     local t=label(b,name,UDim2.new(1,-65,0,20),UDim2.fromOffset(46,3),13)
     t.TextTruncate=Enum.TextTruncate.AtEnd
     local subtext=label(b,caption,UDim2.new(1,-65,0,17),UDim2.fromOffset(46,24),10)
@@ -1016,7 +1010,7 @@ function Hub:Dashboard(tab)
     local page=pageFor(tab)
     if self.HomeBuilt then return end
     self.HomeBuilt=true
-    local hero=rounded(ui("Frame",page,{Size=UDim2.new(1,-5,0,110),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true}),12)
+    local hero=rounded(ui("Frame",page,{Size=UDim2.new(1,-5,0,100),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true}),12)
     gradient(hero,Color3.fromRGB(28,11,19),Color3.fromRGB(67,12,24),12)
     local heroEdge=stroke(hero,C.red,0.25)
     -- Logo showcase: no 3D models, monster, fire, or external UI framework.
@@ -1034,26 +1028,26 @@ function Hub:Dashboard(tab)
     local fallback=label(badge,"AG",UDim2.fromScale(1,1),nil,34)
     fallback.TextXAlignment=Enum.TextXAlignment.Center;fallback.TextColor3=C.red
     registerLogo(brand,fallback)
-    local word=label(hero,"A G O N Y  H U B",UDim2.new(0.64,-18,0,17),UDim2.fromOffset(15,9),10)
+    local word=label(hero,"A G O N Y  H U B",UDim2.new(0.64,-18,0,17),UDim2.fromOffset(15,13),11)
     word.TextColor3=C.red
-    local welcome=label(hero,"",UDim2.new(0.63,-18,0,35),UDim2.fromOffset(15,27),23)
+    local welcome=label(hero,"",UDim2.new(0.63,-18,0,35),UDim2.fromOffset(15,32),24)
     welcome.TextTruncate=Enum.TextTruncate.AtEnd
     table.insert(welcomeLabels,welcome)
     refreshPrivacy()
-    local tagline=label(hero,options.GameName or "Universal control center",UDim2.new(0.63,-18,0,20),UDim2.fromOffset(16,63),12)
-    tagline.TextColor3=Color3.fromRGB(222,161,165)
-    tagline.TextTruncate=Enum.TextTruncate.AtEnd
-    local marker=ui("Frame",hero,{Size=UDim2.fromOffset(100,3),Position=UDim2.fromOffset(16,91),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
+    local marker=ui("Frame",hero,{Size=UDim2.fromOffset(100,3),Position=UDim2.fromOffset(16,78),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
     gradient(marker,C.red,C.amber)
-    local performance=Hub:Section(tab,"PERFORMANCE",false)
-    local metrics=ui("Frame",page,{Size=UDim2.new(1,-5,0,82),BackgroundTransparency=1})
+    local performanceRow=ui("Frame",page,{Size=UDim2.new(1,-5,0,23),BackgroundTransparency=1})
+    local performance=label(performanceRow,"PERFORMANCE",UDim2.new(1,-12,1,0),UDim2.fromOffset(8,0),11)
+    performance.TextColor3=C.red
+    local metrics=ui("Frame",page,{Size=UDim2.new(1,-5,0,106),BackgroundTransparency=1})
     ui("UIListLayout",metrics,{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,8),SortOrder=Enum.SortOrder.LayoutOrder})
     local function metric(index,name,caption,color)
         local f=rounded(ui("Frame",metrics,{Size=UDim2.new(0.25,-6,1,0),LayoutOrder=index,BackgroundColor3=C.card,BorderSizePixel=0}),10)
         stroke(f,color,0.55)
-        local t=label(f,name,UDim2.new(1,-16,0,20),UDim2.fromOffset(10,6),10);t.TextColor3=C.muted
-        local val=label(f,"--",UDim2.new(1,-16,0,30),UDim2.fromOffset(10,26),21);val.TextColor3=color;val.TextTruncate=Enum.TextTruncate.AtEnd
-        local foot=label(f,caption,UDim2.new(1,-16,0,16),UDim2.fromOffset(10,59),10);foot.TextColor3=C.muted
+        local t=label(f,name,UDim2.new(1,-20,0,23),UDim2.fromOffset(10,8),12);t.TextColor3=C.muted
+        local val=label(f,"--",UDim2.new(1,-20,0,40),UDim2.fromOffset(10,31),27);val.TextColor3=color;val.TextScaled=true
+        ui("UITextSizeConstraint",val,{MinTextSize=12,MaxTextSize=27})
+        local foot=label(f,caption,UDim2.new(1,-20,0,20),UDim2.fromOffset(10,77),12);foot.TextColor3=C.muted
         return val,foot
     end
     local fps,fpsRating=metric(1,"FPS","MEASURING...",C.red)
@@ -1135,7 +1129,6 @@ local Hub = AgonyUI.Create({
     HideUsername = true,
     DiscordURL = "", -- paste your exact Discord invite URL
     TikTokURL = "", -- paste your exact TikTok profile URL
-    GameName = "Universal control center",
     Tabs = {"Home", "Main", "Farm", "Settings"},
     Descriptions = {Main = "Main features", Farm = "Game features", Settings = "Preferences"},
     OpenOnLoad = true,
@@ -1150,6 +1143,11 @@ local Hub = AgonyUI.Create({
         Home = "",
         Main = "",
         Farm = "",
+        Egg = "", -- used when Egg is included in Tabs
+        Boss = "",
+        Trade = "",
+        Event = "",
+        Island = "",
         Settings = "",
         -- Add more entries using the exact tab name.
     },
