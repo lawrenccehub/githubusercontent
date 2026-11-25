@@ -343,24 +343,24 @@ CanvasSize = UDim2.fromOffset(0, 0)
 })
 local tabLayout = ui("UIListLayout", tabScroll, {
 SortOrder = Enum.SortOrder.LayoutOrder,
-Padding = UDim.new(0, 5)
+Padding = UDim.new(0, 2)
 })
 on(tabLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
 tabScroll.CanvasSize = UDim2.fromOffset(0, tabLayout.AbsoluteContentSize.Y + 8)
 end)
 for i, name in ipairs(names) do
 assert(type(name) == "string" and not tabs[name], "Tab names must be unique strings")
-local b = button(tabScroll, "", UDim2.new(1, -5, 0, 44))
+local b = button(tabScroll, "", UDim2.new(1, -5, 0, 42))
 b.LayoutOrder = i
 local symbols={Home="⌂",Settings="⚙",Main="▦",Farm="◆",Egg="◇",Boss="✦",Trade="⇄",Event="★",Island="⌖"}
-local index = label(b, symbols[name] or string.format("%02d", i), UDim2.fromOffset(34,44), UDim2.fromOffset(7,0), 25)
+local index = label(b, symbols[name] or string.format("%02d", i), UDim2.fromOffset(34,42), UDim2.fromOffset(7,0), 25)
 index.TextXAlignment=Enum.TextXAlignment.Center
 index.TextColor3 = C.muted
-local tabIcon=addIcon(b,index, (options.TabIcons or {})[name],UDim2.fromOffset(30,30),UDim2.fromOffset(9,7))
+local tabIcon=addIcon(b,index, (options.TabIcons or {})[name],UDim2.fromOffset(30,30),UDim2.fromOffset(9,6),C.muted)
 local text = label(b, name, UDim2.new(1,-65,1,0), UDim2.fromOffset(48,0), 13)
 text.TextTruncate = Enum.TextTruncate.AtEnd
-local rail = rounded(ui("Frame",b,{Size=UDim2.fromOffset(3,28),Position=UDim2.fromOffset(0,8),BackgroundColor3=C.red,BorderSizePixel=0,Visible=false}),2)
-local arrow = label(b, ">", UDim2.fromOffset(13,44), UDim2.new(1,-17,0,0),12)
+local rail = rounded(ui("Frame",b,{Size=UDim2.fromOffset(3,28),Position=UDim2.fromOffset(0,7),BackgroundColor3=C.red,BorderSizePixel=0,Visible=false}),2)
+local arrow = label(b, ">", UDim2.fromOffset(13,42), UDim2.new(1,-17,0,0),12)
 arrow.TextColor3 = C.muted
 local outline = stroke(b,C.line,0.65)
 tabs[name] = b
@@ -741,6 +741,7 @@ decor.rail.Visible=active
 animate(tabs[n],{BackgroundColor3=active and C.selected or C.card})
 animate(decor.outline,{Color=active and C.red or C.line,Transparency=active and 0.12 or 0.65})
 decor.index.TextColor3=active and C.red or C.muted
+if decor.icon then decor.icon.ImageColor3=active and C.red or C.muted end
 decor.arrow.TextColor3=active and C.red or C.muted
 end
 heading.Text = name
@@ -1127,29 +1128,28 @@ local Hub = AgonyUI.Create({
     Version = "", -- set your game script version here, e.g. "11.9.110"
     Developer = "mrpopsicle12",
     HideUsername = true,
-    DiscordURL = "", -- paste your exact Discord invite URL
-    TikTokURL = "", -- paste your exact TikTok profile URL
-    Tabs = {"Home", "Main", "Farm", "Settings"},
+    DiscordURL = "https://discord.gg/PNrfkj73eT",
+    TikTokURL = "https://www.tiktok.com/@mrpopscle12?is_from_webapp=1&sender_device=pc",
+    Tabs = {"Home", "Main", "Farm", "Egg", "Event", "Island", "Boss", "Trade", "Settings"},
     Descriptions = {Main = "Main features", Farm = "Game features", Settings = "Preferences"},
     OpenOnLoad = true,
     LoadingTime = 10,
     Logo = "", -- Roblox image asset ID (preferred); e.g. "rbxassetid://123456789"
     LogoURL = "https://raw.githubusercontent.com/mrpopsicle12/AgonyHubAssets/main/agony.png", -- original project logo; optional fallback
     CommunityIcons = {
-        Discord = "", -- paste your uploaded Roblox image asset ID
-        TikTok = "",
+        Discord = "rbxassetid://118812867465194",
+        TikTok = "rbxassetid://109900625431595",
     },
     TabIcons = {
-        Home = "",
-        Main = "",
-        Farm = "",
-        Egg = "", -- used when Egg is included in Tabs
-        Boss = "",
-        Trade = "",
-        Event = "",
-        Island = "",
-        Settings = "",
-        -- Add more entries using the exact tab name.
+        Home = "rbxassetid://10723407389",
+        Main = "rbxassetid://10723424838",
+        Farm = "rbxassetid://10734975692",
+        Egg = "rbxassetid://10723345518",
+        Event = "rbxassetid://10734918735",
+        Island = "rbxassetid://10734910680",
+        Boss = "rbxassetid://10734962068",
+        Trade = "rbxassetid://10709768019",
+        Settings = "rbxassetid://10734950309",
     },
 })
 Hub:Home("Home")
@@ -1163,6 +1163,9 @@ end)
 Hub:Dropdown("Farm", "Select Mode", {"Normal", "Fast"}, "Normal", function(value)
     print("Selected:", value)
 end)
+for _, tabName in ipairs({"Egg", "Event", "Island", "Boss", "Trade"}) do
+    Hub:Section(tabName, tabName .. " features")
+end
 Hub:Textbox("Settings", "Example Input", "Enter text", "", function(value)
     print("Input:", value)
 end)
