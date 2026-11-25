@@ -110,17 +110,44 @@ local function imageURI(value)
     end
     return nil
 end
+-- One visual at a time: never paint a fallback over a loaded image.
+local imageRequests = setmetatable({}, {__mode="k"})
+local ContentProvider = game:GetService("ContentProvider")
 local function displayImage(image, fallback, uri)
     if not uri then return end
-    local ok=pcall(function() image.Image=uri end)
-    if not ok then return end
-    local function refresh()
-        if alive and image.Parent and fallback.Parent then
-            fallback.Visible=not image.IsLoaded
+    local request = (imageRequests[image] or 0) + 1
+    imageRequests[image] = request
+    local function valid()
+        return alive and image.Parent and fallback.Parent and imageRequests[image] == request
+    end
+    local loaded = false
+    local function paint(ready)
+        if not valid() then return end
+        loaded = ready
+        -- ImageTransparency, not Visible: some images contain their fallback.
+        if ready then
+            fallback.Visible = false
+            image.ImageTransparency = 0
+        else
+            image.ImageTransparency = 1
+            fallback.Visible = true
         end
     end
-    on(image:GetPropertyChangedSignal("IsLoaded"),refresh)
-    refresh()
+    paint(false)
+    local ok = pcall(function() image.Image = uri end)
+    if not ok then return end
+    on(image:GetPropertyChangedSignal("IsLoaded"),function()
+        if valid() and image.IsLoaded then paint(true) end
+    end)
+    if image.IsLoaded then paint(true) end
+    task.spawn(function()
+        pcall(function()
+            ContentProvider:PreloadAsync({image}, function(_, status)
+                if valid() and status == Enum.AssetFetchStatus.Success then paint(true) end
+            end)
+        end)
+        if valid() and image.IsLoaded and not loaded then paint(true) end
+    end)
 end
 local function addIcon(parent, fallback, value, size, pos, tint)
     local uri=imageURI(value)
@@ -457,7 +484,10 @@ linkHelp.TextWrapped=true
 linkHelp.TextColor3=C.muted
 linkHelp.ZIndex=52
 local linkBox=rounded(ui("TextBox",linkPanel,{Size=UDim2.new(1,-32,0,32),Position=UDim2.fromOffset(16,87),BackgroundColor3=C.deep,BorderSizePixel=0,TextColor3=C.white,Font=Enum.Font.Gotham,TextSize=12,ClearTextOnFocus=false,TextEditable=false,Text="",ZIndex=52}),7)
-local copyButton=button(linkPanel,"COPY LINK",UDim2.new(1,-32,0,32),UDim2.fromOffset(16,130))
+local openButton=button(linkPanel,"OPEN LINK",UDim2.new(0.5,-20,0,32),UDim2.fromOffset(16,130))
+openButton.BackgroundColor3=C.selected
+openButton.ZIndex=52
+local copyButton=button(linkPanel,"COPY LINK",UDim2.new(0.5,-20,0,32),UDim2.new(0.5,4,0,130))
 copyButton.BackgroundColor3=C.selected
 copyButton.ZIndex=52
 local currentLink=""
@@ -472,13 +502,30 @@ local function showLink(name,url)
     local valid=currentLink:match("^https://%S+$")~=nil
     if not valid then currentLink="" end
     linkHeading.Text=name
-    linkHelp.Text=valid and "Copy this link and open it in your browser or app." or "Community link not configured yet."
+    linkHelp.Text=valid and "Choose Open or Copy. Browser opening depends on your host." or "Community link not configured yet."
     linkBox.Text=currentLink
     linkBox.Visible=valid
     copyButton.Visible=valid
+    openButton.Visible=valid
+    openButton.Text="OPEN LINK"
     copyButton.Text="COPY LINK"
     linkOverlay.Visible=true
 end
+-- Only use a browser callback supplied by the host; no privileged Roblox APIs.
+on(openButton.Activated,function()
+    if currentLink=="" then return end
+    local opener=options.OpenURL
+    if type(opener)~="function" then
+        linkHelp.Text="Browser opening unavailable. Use Copy Link instead."
+        return
+    end
+    local ok,result=pcall(opener,currentLink)
+    if ok and result~=false then
+        linkHelp.Text="Browser request sent."
+    else
+        linkHelp.Text="Could not open browser. Use Copy Link instead."
+    end
+end)
 on(copyButton.Activated,function()
     if currentLink=="" then return end
     if type(setclipboard)=="function" then
@@ -498,9 +545,35 @@ local function communityButton(name,caption,url,y,accent,monogram)
     b.BackgroundColor3=C.deep
     stroke(b,C.line,0.45)
     local mark=rounded(ui("Frame",b,{Size=UDim2.fromOffset(32,32),Position=UDim2.fromOffset(6,6),BackgroundColor3=accent,BorderSizePixel=0}),6)
-    local letter=label(mark,monogram,UDim2.fromScale(1,1),nil,22)
-    letter.TextXAlignment=Enum.TextXAlignment.Center
-    addIcon(mark,letter,(options.CommunityIcons or {})[name],UDim2.new(1,-4,1,-4),UDim2.fromOffset(2,2))
+    -- Native vector-style fallback: independent of external image permissions.
+    local symbol=ui("Frame",mark,{Name="BuiltInSymbol",Size=UDim2.fromScale(1,1),BackgroundTransparency=1})
+    local function part(x,y,w,h,color,r,rotation)
+        local f=rounded(ui("Frame",symbol,{Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(w,h),BackgroundColor3=color,BorderSizePixel=0,Rotation=rotation or 0}),r or 0)
+        return f
+    end
+    local white=Color3.new(1,1,1)
+    if name=="Discord" then
+        -- Stylized controller face, not a downloaded asset.
+        part(6,9,20,15,white,6)
+        part(6,8,7,9,white,3,-20)
+        part(19,8,7,9,white,3,20)
+        part(10,14,4,5,accent,4)
+        part(18,14,4,5,accent,4)
+        part(12,22,8,3,accent,2)
+    elseif name=="TikTok" then
+        local function note(dx,dy,color)
+            part(14+dx,6+dy,4,17,color,2)
+            part(16+dx,6+dy,8,5,color,2,24)
+            part(7+dx,18+dy,10,9,color,5)
+        end
+        note(-1,1,Color3.fromRGB(37,244,238))
+        note(1,0,Color3.fromRGB(254,44,85))
+        note(0,0,white)
+    else
+        local letter=label(symbol,monogram,UDim2.fromScale(1,1),nil,22)
+        letter.TextXAlignment=Enum.TextXAlignment.Center
+    end
+    addIcon(mark,symbol,(options.CommunityIcons or {})[name],UDim2.new(1,-4,1,-4),UDim2.fromOffset(2,2))
     local t=label(b,name,UDim2.new(1,-65,0,20),UDim2.fromOffset(46,3),13)
     t.TextTruncate=Enum.TextTruncate.AtEnd
     local subtext=label(b,caption,UDim2.new(1,-65,0,17),UDim2.fromOffset(46,24),10)
@@ -1154,6 +1227,8 @@ local Hub = AgonyUI.Create({
     Version = "", -- set your game script version here, e.g. "11.9.110"
     Developer = "mrpopsicle12",
     HideUsername = true,
+    -- Optional authorized host callback: OpenURL = function(url) ... end,
+    -- Roblox LocalScripts do not have a general-purpose browser-opening API.
     DiscordURL = "https://discord.gg/PNrfkj73eT",
     TikTokURL = "https://www.tiktok.com/@mrpopscle12?is_from_webapp=1&sender_device=pc",
     Tabs = {"Home", "Main", "Farm", "Egg", "Event", "Island", "Boss", "Trade", "Settings"},
