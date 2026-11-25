@@ -17,7 +17,6 @@ local conns = {}
 local Hub = {}
 local identityHidden = options.HideUsername ~= false
 local welcomeLabels = {}
-local refreshBannerAvatar
 local function on(signal, handler)
 local c = signal:Connect(handler)
 table.insert(conns, c)
@@ -198,7 +197,7 @@ barLabel.TextXAlignment =
 Enum.TextXAlignment.Center
 barLabel.TextColor3 = C.muted
 local window = rounded(ui("Frame", screen, {
-Size = UDim2.fromOffset(790, 470),
+Size = UDim2.fromOffset(790, 510),
 AnchorPoint = Vector2.new(0.5, 0.5),
 Position = UDim2.fromScale(0.5, 0.5),
 BackgroundColor3 = C.bg,
@@ -223,7 +222,7 @@ if ok and typeof(resolution) == "Vector2"
     and resolution.X >= v.X * 1.15 and resolution.Y >= v.Y * 1.15 then
     v = resolution
 end
-local preferredScale = math.min((v.X - 20) / 790, (v.Y - 20) / 470)
+local preferredScale = math.min((v.X - 20) / 790, (v.Y - 20) / 510)
 scale.Scale = math.clamp(preferredScale, 0.1, 1)
 if loading.Parent then
 loadingScale.Scale = math.clamp(
@@ -341,26 +340,26 @@ local profile = rounded(ui("Frame", window, {
     BorderSizePixel=0, Visible=false
 }),10)
 stroke(profile,C.line,0.15)
-local profileTitle=label(profile,"PLAYER PROFILE",UDim2.new(1,-90,0,20),UDim2.fromOffset(12,7),11)
+local profileTitle=label(profile,"PLAYER PROFILE",UDim2.new(1,-90,0,20),UDim2.fromOffset(12,9),13)
 profileTitle.TextColor3=C.red
 local avatar=rounded(ui("ImageLabel",profile,{
-    Size=UDim2.fromOffset(51,51),Position=UDim2.fromOffset(12,35),BackgroundTransparency=1
+    Size=UDim2.fromOffset(76,76),Position=UDim2.fromOffset(12,42),BackgroundTransparency=1
 }),12)
 local privateAvatar=rounded(ui("Frame",profile,{
-    Size=UDim2.fromOffset(51,51),Position=UDim2.fromOffset(12,35),BackgroundColor3=C.selected,BorderSizePixel=0
+    Size=UDim2.fromOffset(76,76),Position=UDim2.fromOffset(12,42),BackgroundColor3=C.selected,BorderSizePixel=0
 }),12)
 stroke(privateAvatar,C.red,0.35)
-local privateIcon=label(privateAvatar,"AG",UDim2.fromScale(1,1),nil,17)
+local privateIcon=label(privateAvatar,"AG",UDim2.fromScale(1,1),nil,24)
 privateIcon.TextXAlignment=Enum.TextXAlignment.Center
-local username=label(profile,"********",UDim2.new(1,-85,0,24),UDim2.fromOffset(73,37),15)
+local username=label(profile,"********",UDim2.new(1,-112,0,28),UDim2.fromOffset(100,48),17)
 username.TextTruncate=Enum.TextTruncate.AtEnd
-local profileCaption=label(profile,"PRIVATE MODE",UDim2.new(1,-85,0,20),UDim2.fromOffset(73,62),10)
+local profileCaption=label(profile,"PRIVATE MODE",UDim2.new(1,-112,0,22),UDim2.fromOffset(100,77),11)
 profileCaption.TextColor3=C.red
-local privacyButton=button(profile,"SHOW",UDim2.fromOffset(57,21),UDim2.new(1,-69,0,8))
-privacyButton.TextSize=9
+local privacyButton=button(profile,"SHOW",UDim2.fromOffset(65,28),UDim2.new(1,-77,0,7))
+privacyButton.TextSize=11
 privacyButton.BackgroundColor3=C.selected
 stroke(privacyButton,C.red,0.45)
-local privacyHint=label(profile,"Identity controls",UDim2.new(1,-24,0,18),UDim2.fromOffset(12,100),10)
+local privacyHint=label(profile,"Identity controls  /  SHOW or HIDE",UDim2.new(1,-24,0,18),UDim2.fromOffset(12,139),11)
 privacyHint.TextColor3=C.muted
 local function refreshPrivacy()
     username.Text = identityHidden and "********" or ("@" .. player.Name)
@@ -371,7 +370,6 @@ local function refreshPrivacy()
     for _, welcome in ipairs(welcomeLabels) do
         welcome.Text = "Welcome, " .. (identityHidden and "********" or player.DisplayName)
     end
-    if refreshBannerAvatar then refreshBannerAvatar() end
 end
 function Hub:SetPrivacy(value)
     identityHidden = value == true
@@ -386,9 +384,9 @@ local credits=rounded(ui("Frame",window,{
     BackgroundColor3=C.card,BorderSizePixel=0,Visible=false
 }),10)
 stroke(credits,C.line,0.2)
-local creditsHeading=label(credits,"CREDITS / COMMUNITY",UDim2.new(1,-24,0,20),UDim2.fromOffset(12,7),11)
+local creditsHeading=label(credits,"CREDITS / COMMUNITY",UDim2.new(1,-24,0,20),UDim2.fromOffset(12,9),13)
 creditsHeading.TextColor3=C.red
-local developerLabel=label(credits,"Developed by "..tostring(options.Developer or "mrpopsicle12"),UDim2.new(1,-24,0,17),UDim2.fromOffset(12,101),10)
+local developerLabel=label(credits,"Developed by "..tostring(options.Developer or "mrpopsicle12"),UDim2.new(1,-24,0,17),UDim2.fromOffset(12,139),11)
 developerLabel.TextTruncate=Enum.TextTruncate.AtEnd
 local linkOverlay=ui("Frame",window,{Size=UDim2.fromScale(1,1),BackgroundColor3=C.bg,BackgroundTransparency=0.2,BorderSizePixel=0,Visible=false,ZIndex=50,Active=true})
 rounded(linkOverlay,12)
@@ -440,24 +438,24 @@ on(copyButton.Activated,function()
 end)
 on(linkBox.FocusLost,function() linkBox.Text=currentLink;linkBox.TextEditable=false end)
 local function communityButton(name,caption,url,y,accent,monogram)
-    local b=button(credits,"",UDim2.new(1,-24,0,30),UDim2.fromOffset(12,y))
+    local b=button(credits,"",UDim2.new(1,-24,0,44),UDim2.fromOffset(12,y))
     b.BackgroundColor3=C.deep
     stroke(b,C.line,0.45)
-    local mark=rounded(ui("Frame",b,{Size=UDim2.fromOffset(22,22),Position=UDim2.fromOffset(4,4),BackgroundColor3=accent,BorderSizePixel=0}),6)
-    local letter=label(mark,monogram,UDim2.fromScale(1,1),nil,12)
+    local mark=rounded(ui("Frame",b,{Size=UDim2.fromOffset(32,32),Position=UDim2.fromOffset(6,6),BackgroundColor3=accent,BorderSizePixel=0}),6)
+    local letter=label(mark,monogram,UDim2.fromScale(1,1),nil,16)
     letter.TextXAlignment=Enum.TextXAlignment.Center
-    local t=label(b,name,UDim2.new(0.45,-15,1,0),UDim2.fromOffset(34,0),11)
+    local t=label(b,name,UDim2.new(1,-65,0,20),UDim2.fromOffset(46,3),13)
     t.TextTruncate=Enum.TextTruncate.AtEnd
-    local subtext=label(b,caption,UDim2.new(0.55,-30,1,0),UDim2.new(0.45,8,0,0),9)
+    local subtext=label(b,caption,UDim2.new(1,-65,0,17),UDim2.fromOffset(46,24),10)
     subtext.TextColor3=C.muted
-    subtext.TextXAlignment=Enum.TextXAlignment.Right
+    subtext.TextXAlignment=Enum.TextXAlignment.Left
     subtext.TextTruncate=Enum.TextTruncate.AtEnd
-    local arrow=label(b,">",UDim2.fromOffset(16,30),UDim2.new(1,-17,0,0),13)
+    local arrow=label(b,">",UDim2.fromOffset(16,44),UDim2.new(1,-19,0,0),16)
     arrow.TextColor3=C.red
     on(b.Activated,function() showLink(name,url) end)
 end
-communityButton("Discord","Join",options.DiscordURL,32,Color3.fromRGB(88,101,242),"D")
-communityButton("TikTok","Follow",options.TikTokURL,66,Color3.fromRGB(197,37,65),"T")
+communityButton("Discord","Join community",options.DiscordURL,36,Color3.fromRGB(88,101,242),"D")
+communityButton("TikTok","Follow creator",options.TikTokURL,85,Color3.fromRGB(197,37,65),"T")
 
 task.spawn(function()
 local ok, image = pcall(function()
@@ -495,9 +493,10 @@ sub.TextTruncate = Enum.TextTruncate.AtEnd
 local close = button(
 content,
 "X",
-UDim2.fromOffset(27, 27),
-UDim2.new(1, -37, 0, 9)
+UDim2.fromOffset(38, 38),
+UDim2.new(1, -50, 0, 10)
 )
+close.TextSize = 18
 close.ZIndex = 10
 close.BackgroundColor3 = C.selected
 stroke(close,C.red,0.45)
@@ -941,122 +940,86 @@ function Hub:Dashboard(tab)
     local page=pageFor(tab)
     if self.HomeBuilt then return end
     self.HomeBuilt=true
-    local hero=rounded(ui("Frame",page,{Size=UDim2.new(1,-5,0,104),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true}),12)
-    gradient(hero,Color3.fromRGB(31,10,18),Color3.fromRGB(100,9,20),12)
+    local hero=rounded(ui("Frame",page,{Size=UDim2.new(1,-5,0,110),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true}),12)
+    gradient(hero,Color3.fromRGB(28,11,19),Color3.fromRGB(67,12,24),12)
     local heroEdge=stroke(hero,C.red,0.25)
-    -- BLOODFIRE: procedural flame ribbons and drifting embers, no asset downloads.
+    -- AGONY MONSTER: a self-contained 3D mascot with no external assets.
     local art=ui("Frame",hero,{Size=UDim2.new(0.42,0,1,0),Position=UDim2.fromScale(0.58,0),BackgroundTransparency=1,ClipsDescendants=true})
-    local aura=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.65,0.88),Size=UDim2.fromOffset(196,115),BackgroundColor3=Color3.fromRGB(210,22,36),BackgroundTransparency=0.55,BorderSizePixel=0}),100)
-    local ag=gradient(aura,Color3.fromRGB(70,0,10),Color3.fromRGB(255,70,27),90)
-    ag.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(0.55,0.45),NumberSequenceKeypoint.new(1,0)})
-    local tongues={}
-    for i=1,9 do
-        local h=48+(i*23)%80
-        local x=0.18+i*0.075
-        local flame=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,1),Position=UDim2.fromScale(x,1.22),Size=UDim2.fromOffset(17+(i%3)*7,h),Rotation=-24+(i*11)%43,BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0}),18)
-        local g=ui("UIGradient",flame,{Rotation=90,Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(120,0,21)),ColorSequenceKeypoint.new(0.42,C.red),ColorSequenceKeypoint.new(0.78,Color3.fromRGB(255,76,20)),ColorSequenceKeypoint.new(1,Color3.fromRGB(255,199,94))}),Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(0.28,0.28),NumberSequenceKeypoint.new(0.7,0.02),NumberSequenceKeypoint.new(1,0.1)})})
-        tongues[i]={frame=flame,h=h,x=x,rot=flame.Rotation}
+    -- Eclipse rings behind the mascot; no flames or embers.
+    for i=1,3 do
+        local ring=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.58,0.48),Size=UDim2.fromOffset(65+i*23,65+i*23),BackgroundTransparency=1,BorderSizePixel=0}),100)
+        stroke(ring,C.red,0.65+i*0.08,1)
     end
-    local sparks={}
-    for i=1,14 do
-        local dot=rounded(ui("Frame",art,{Size=UDim2.fromOffset(2+i%3,2+i%3),BackgroundColor3=i%3==0 and C.amber or C.red,BorderSizePixel=0,Rotation=45}),2)
-        sparks[i]=dot
+    for i=1,3 do
+        local stripe=ui("Frame",art,{Size=UDim2.fromOffset(15,160),Position=UDim2.fromScale(0.12+i*0.22,-0.2),Rotation=28,BackgroundColor3=C.red,BackgroundTransparency=0.94,BorderSizePixel=0})
     end
-    -- Animated avatar showcase. Private mode uses a locally built anonymous rig.
-    -- Only when SHOW is selected do we request the player's real Roblox appearance.
     local viewport=ui("ViewportFrame",art,{
-        Name="AgonyAvatarShowcase",Size=UDim2.fromScale(0.86,0.91),
-        Position=UDim2.fromScale(0.13,0.01),BackgroundTransparency=1,
-        BorderSizePixel=0,Ambient=Color3.fromRGB(180,120,130),
-        LightColor=Color3.fromRGB(255,225,213),LightDirection=Vector3.new(-1,-1,-1),ZIndex=3
+        Name="AgonyMonsterShowcase",Size=UDim2.fromScale(0.95,0.88),
+        Position=UDim2.fromScale(0.06,0),BackgroundTransparency=1,
+        BorderSizePixel=0,Ambient=Color3.fromRGB(165,132,143),
+        LightColor=Color3.fromRGB(255,215,222),LightDirection=Vector3.new(-1,-1,1),ZIndex=3
     })
-    local world=ui("WorldModel",viewport,{Name="AvatarWorld"})
-    local camera=ui("Camera",viewport,{FieldOfView=34})
+    local world=ui("WorldModel",viewport,{Name="MonsterWorld"})
+    local camera=ui("Camera",viewport,{FieldOfView=32})
     viewport.CurrentCamera=camera
-    local sig=label(art,"PRIVATE AVATAR",UDim2.fromScale(0.85,0.16),UDim2.fromScale(0.14,0.83),9)
-    sig.TextXAlignment=Enum.TextXAlignment.Center;sig.TextColor3=C.amber;sig.ZIndex=4
-    local activeRig,basePivot,activeArm,armOffset
-    local avatarRequest=0
-    local function privateRig()
-        local rig=Instance.new("Model")
-        rig.Name="CrimsonMascot"
-        local function part(name,size,position,color,rotation)
-            local p=Instance.new("Part")
-            p.Name=name;p.Size=size;p.Color=color;p.Anchored=true
-            p.CanCollide=false;p.CanTouch=false;p.CanQuery=false
-            p.Material=Enum.Material.SmoothPlastic
-            p.CFrame=CFrame.new(position)*CFrame.Angles(0,0,rotation or 0)
-            p.Parent=rig
-            return p
-        end
-        local dark=Color3.fromRGB(32,23,29)
-        local red=Color3.fromRGB(165,25,44)
-        local skin=Color3.fromRGB(226,189,180)
-        part("Torso",Vector3.new(2,2,1),Vector3.new(0,3,0),dark)
-        part("ChestAccent",Vector3.new(0.25,1.6,0.07),Vector3.new(0,3,-0.54),red,-0.35)
-        local head=part("Head",Vector3.new(1.3,1.2,1.15),Vector3.new(0,4.65,0),skin)
-        head.Shape=Enum.PartType.Block
-        part("Mask",Vector3.new(1.32,0.53,0.07),Vector3.new(0,4.44,-0.60),dark)
-        for _,x in ipairs({-0.28,0.28}) do
-            part("Eye",Vector3.new(0.19,0.10,0.07),Vector3.new(x,4.86,-0.60),red)
-        end
-        part("LeftArm",Vector3.new(0.82,2,0.88),Vector3.new(-1.52,3,0),dark,-0.12)
-        part("RightArm",Vector3.new(0.82,2,0.88),Vector3.new(1.52,3,0),red,0.12)
-        part("LeftLeg",Vector3.new(0.94,2,0.92),Vector3.new(-0.52,1,0),dark)
-        part("RightLeg",Vector3.new(0.94,2,0.92),Vector3.new(0.52,1,0),dark)
-        return rig
+    local sig=label(art,"A G O N Y   M O N S T E R",UDim2.fromScale(0.96,0.16),UDim2.fromScale(0.04,0.82),9)
+    sig.TextXAlignment=Enum.TextXAlignment.Center;sig.TextColor3=C.red;sig.ZIndex=4
+    local rig=Instance.new("Model")
+    rig.Name="AgonyMonster"
+    local armor=Color3.fromRGB(49,37,48)
+    local obsidian=Color3.fromRGB(22,20,27)
+    local crimson=Color3.fromRGB(140,16,40)
+    local glow=Color3.fromRGB(255,48,77)
+    local glowing={}
+    local function part(name,size,x,y,z,color,rx,ry,rz,neon,kind,parent)
+        local p=Instance.new(kind or "Part")
+        p.Name=name;p.Size=size;p.Color=color;p.Anchored=true
+        p.CanCollide=false;p.CanTouch=false;p.CanQuery=false
+        p.Material=neon and Enum.Material.Neon or Enum.Material.SmoothPlastic
+        p.CFrame=CFrame.new(x,y,z)*CFrame.Angles(math.rad(rx or 0),math.rad(ry or 0),math.rad(rz or 0))
+        p.Parent=parent or rig
+        if neon then table.insert(glowing,p) end
+        return p
     end
-    local function installRig(rig,isPrivate)
-        if not alive or not viewport.Parent then rig:Destroy();return end
-        for _,obj in ipairs(rig:GetDescendants()) do
-            if obj:IsA("BaseScript") then obj:Destroy()
-            elseif obj:IsA("BasePart") then
-                obj.Anchored=true;obj.CanCollide=false;obj.CanTouch=false;obj.CanQuery=false
-            end
+    part("Torso",Vector3.new(2.3,2.1,1.25),0,3.05,0,obsidian)
+    part("ChestPlate",Vector3.new(1.85,1.45,0.28),0,3.24,-0.72,armor)
+    part("Core",Vector3.new(0.62,0.62,0.12),0,3.45,-0.9,glow,0,0,45,true)
+    part("Belt",Vector3.new(2.16,0.31,1.34),0,2.05,0,crimson)
+    part("Head",Vector3.new(1.64,1.35,1.27),0,4.74,0,armor)
+    part("Face",Vector3.new(1.48,0.79,0.15),0,4.66,-0.68,obsidian)
+    for _,s in ipairs({-1,1}) do
+        part("HornBase",Vector3.new(0.43,0.69,0.48),s*0.72,5.46,0,crimson,0,0,-s*22)
+        part("HornTip",Vector3.new(0.29,0.8,0.36),s*0.98,5.91,0,armor,0,0,-s*35,false,"WedgePart")
+        part("Eye",Vector3.new(0.44,0.17,0.12),s*0.38,4.9,-0.79,glow,0,0,s*14,true)
+        part("Brow",Vector3.new(0.59,0.15,0.12),s*0.38,5.04,-0.79,crimson,0,0,s*14)
+        part("Jaw",Vector3.new(0.27,0.37,0.22),s*0.58,4.31,-0.65,crimson,0,0,-s*12)
+        part("Fang",Vector3.new(0.12,0.24,0.12),s*0.25,4.47,-0.8,Color3.fromRGB(231,218,222),0,0,180,false,"WedgePart")
+        part("Leg",Vector3.new(0.92,1.55,1.02),s*0.58,1.18,0,obsidian)
+        part("Shin",Vector3.new(0.79,0.78,0.24),s*0.58,1.14,-0.53,armor)
+        part("Boot",Vector3.new(1.04,0.52,1.48),s*0.58,0.33,-0.18,crimson)
+    end
+    local arms={}
+    for _,s in ipairs({-1,1}) do
+        local arm=Instance.new("Model");arm.Name=s<0 and "LeftArm" or "RightArm";arm.Parent=rig
+        local shoulder=Vector3.new(s*1.55,3.75,0)
+        local main=part("Arm",Vector3.new(0.83,1.77,0.91),s*1.63,2.97,0,obsidian,0,0,s*6,false,nil,arm)
+        part("Shoulder",Vector3.new(1.04,0.62,1.18),s*1.55,3.69,0,crimson,0,0,s*9,false,nil,arm)
+        part("Spike",Vector3.new(0.34,0.63,0.47),s*1.82,4.17,0,armor,0,0,-s*24,false,"WedgePart",arm)
+        part("Gauntlet",Vector3.new(0.94,0.82,1.05),s*1.73,2.38,0,armor,0,0,s*6,false,nil,arm)
+        for j=1,3 do
+            part("Claw",Vector3.new(0.14,0.37,0.24),s*1.73+(j-2)*0.22,1.83,-0.24,crimson,0,0,180,false,"WedgePart",arm)
         end
-        if activeRig then activeRig:Destroy() end
-        rig.Parent=world
-        local box,size=rig:GetBoundingBox()
-        rig:PivotTo(CFrame.new(-box.Position)*rig:GetPivot())
-        activeRig=rig;basePivot=rig:GetPivot()
-        activeArm=isPrivate and rig:FindFirstChild("RightArm") or nil
-        armOffset=activeArm and basePivot:ToObjectSpace(activeArm.CFrame) or nil
-        local radius=math.max(size.Y*0.62,math.max(size.X,size.Z)*0.75,1)
-        local distance=radius/math.tan(math.rad(camera.FieldOfView/2))
-        camera.CFrame=CFrame.lookAt(Vector3.new(0,0.08,-distance),Vector3.new(0,0.08,0))
+        arm.WorldPivot=CFrame.new(shoulder)
+        arms[#arms+1]={model=arm,side=s}
     end
-    refreshBannerAvatar=function()
-        avatarRequest=avatarRequest+1
-        local request=avatarRequest
-        -- Replace any real model synchronously when privacy is turned on.
-        installRig(privateRig(),true)
-        sig.Text=identityHidden and "PRIVATE AVATAR" or "LOADING AVATAR..."
-        if identityHidden then return end
-        task.spawn(function()
-            local ok,rig=pcall(function()
-                local desc=Players:GetHumanoidDescriptionFromUserId(player.UserId)
-                local kind=Enum.HumanoidRigType.R15
-                local hum=player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-                if hum then kind=hum.RigType end
-                local success,model=pcall(function()
-                    return Players:CreateHumanoidModelFromDescriptionAsync(desc,kind)
-                end)
-                if not success then model=Players:CreateHumanoidModelFromDescription(desc,kind) end
-                desc:Destroy()
-                return model
-            end)
-            if not alive or request~=avatarRequest or identityHidden or not viewport.Parent then
-                if ok and typeof(rig)=="Instance" then rig:Destroy() end
-                return
-            end
-            if ok and typeof(rig)=="Instance" and rig:IsA("Model") then
-                installRig(rig,false);sig.Text="YOUR AVATAR"
-            else
-                sig.Text="MASCOT / AVATAR UNAVAILABLE"
-            end
-        end)
-    end
-    local word=label(hero,"A G O N Y  /  B L O O D F I R E",UDim2.new(0.64,-18,0,17),UDim2.fromOffset(15,9),10)
+    rig.Parent=world
+    local box,size=rig:GetBoundingBox()
+    rig:PivotTo(CFrame.new(-box.Position)*rig:GetPivot())
+    local basePivot=rig:GetPivot()
+    for _,arm in ipairs(arms) do arm.offset=basePivot:ToObjectSpace(arm.model:GetPivot()) end
+    local distance=math.max(size.Y*0.62,size.X*0.48)/math.tan(math.rad(camera.FieldOfView/2))
+    camera.CFrame=CFrame.lookAt(Vector3.new(0,0.1,-distance),Vector3.new(0,0.1,0))
+    local word=label(hero,"A G O N Y  /  M O N S T E R",UDim2.new(0.64,-18,0,17),UDim2.fromOffset(15,9),10)
     word.TextColor3=C.red
     local welcome=label(hero,"",UDim2.new(0.63,-18,0,35),UDim2.fromOffset(15,27),23)
     welcome.TextTruncate=Enum.TextTruncate.AtEnd
@@ -1067,36 +1030,23 @@ function Hub:Dashboard(tab)
     tagline.TextTruncate=Enum.TextTruncate.AtEnd
     local marker=ui("Frame",hero,{Size=UDim2.fromOffset(100,3),Position=UDim2.fromOffset(16,91),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
     gradient(marker,C.red,C.amber)
-    local fireTime,fireAccum=0,0
+    local motionTime,motionAccum=0,0
     on(Run.Heartbeat,function(dt)
         if not alive or not window.Visible or not page.Visible then return end
-        fireTime=fireTime+dt;fireAccum=fireAccum+dt
-        if fireAccum<1/12 then return end
-        fireAccum=0
-        for i,f in ipairs(tongues) do
-            local wave=math.sin(fireTime*3+i*1.8)
-            f.frame.Size=UDim2.fromOffset(17+(i%3)*7,f.h+wave*12)
-            f.frame.Position=UDim2.fromScale(f.x+wave*0.012,1.22)
-            f.frame.Rotation=f.rot+wave*7
+        motionTime=motionTime+dt;motionAccum=motionAccum+dt
+        if motionAccum<1/12 then return end
+        motionAccum=0
+        local pose=CFrame.new(0,math.sin(motionTime*2)*0.12,0)
+            *CFrame.Angles(0,math.sin(motionTime*1.1)*0.35,0)*basePivot
+        rig:PivotTo(pose)
+        for _,arm in ipairs(arms) do
+            arm.model:PivotTo(pose*arm.offset*CFrame.Angles(math.sin(motionTime*2.2+arm.side)*0.14,0,arm.side*(0.08+math.sin(motionTime*1.8)*0.07)))
         end
-        for i,dot in ipairs(sparks) do
-            local progress=(fireTime*(0.25+(i%4)*0.07)+i*0.173)%1
-            dot.Position=UDim2.fromScale(0.13+((i*37)%73)/100+math.sin(fireTime*2+i)*0.035,1-progress)
-            dot.BackgroundTransparency=0.12+progress*0.82
-        end
-        heroEdge.Transparency=0.28+0.12*math.sin(fireTime*2.4)
-        if activeRig and basePivot then
-            local pose=CFrame.new(0,math.sin(fireTime*2.2)*0.12,0)
-                *CFrame.Angles(0,math.sin(fireTime*1.15)*0.48,0)*basePivot
-            activeRig:PivotTo(pose)
-            if activeArm and armOffset then
-                -- Rotate the anonymous mascot arm around its shoulder.
-                activeArm.CFrame=pose*armOffset*CFrame.new(0,0.85,0)
-                    *CFrame.Angles(0,0,0.28+math.sin(fireTime*3)*0.24)*CFrame.new(0,-0.85,0)
-            end
-        end
+        local pulse=(math.sin(motionTime*2.7)+1)*0.5
+        for _,p in ipairs(glowing) do p.Color=glow:Lerp(Color3.fromRGB(255,156,174),pulse*0.55) end
+        heroEdge.Transparency=0.22+0.15*pulse
     end)
-    Hub:Section(tab,"LIVE TELEMETRY")
+    Hub:Section(tab,"PERFORMANCE")
     local metrics=ui("Frame",page,{Size=UDim2.new(1,-5,0,82),BackgroundTransparency=1})
     ui("UIListLayout",metrics,{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,8),SortOrder=Enum.SortOrder.LayoutOrder})
     local function metric(index,name,caption,color)
@@ -1111,7 +1061,7 @@ function Hub:Dashboard(tab)
     local ping,pingRating=metric(2,"PING","MEASURING...",C.amber)
     local count=metric(3,"SERVER","players",C.green)
     local elapsed=metric(4,"SESSION","hub uptime",C.white)
-    local homeCards=ui("Frame",page,{Size=UDim2.new(1,-5,0,128),BackgroundTransparency=1})
+    local homeCards=ui("Frame",page,{Size=UDim2.new(1,-5,0,166),BackgroundTransparency=1})
     profile.Parent=homeCards
     profile.Visible=true
     credits.Parent=homeCards
@@ -1181,7 +1131,7 @@ end)()
 
 -- EDIT ONLY THIS SECTION FOR EACH GAME.
 local Hub = AgonyUI.Create({
-    Version = "CRIMSON 1.3",
+    Version = "CRIMSON 1.4",
     Developer = "mrpopsicle12",
     HideUsername = true,
     DiscordURL = "", -- paste your exact Discord invite URL
