@@ -12,13 +12,34 @@ local Stats = game:GetService("Stats")
 local player = Players.LocalPlayer
 assert(player, "Agony UI must run on the client")
 local pg = player:WaitForChild("PlayerGui")
+-- Single instance: one standalone Agony UI per client, even on re-execute.
+local rootName = options.Id or "AgonyHubUI"
+local function isOldStandalone(gui)
+    return gui:IsA("ScreenGui") and (
+        gui:GetAttribute("AgonyStandaloneUI") == true
+        or gui.Name == rootName
+        or gui.Name == rootName .. "Floating"
+        or gui.Name == "AgonyHubUI"
+        or gui.Name == "AgonyHubUIFloating"
+    )
+end
+-- GetChildren (not FindFirstChild) handles multiple roots with the same name.
+-- Do not touch unrelated Roblox/game-specific interfaces.
+for _, gui in ipairs(pg:GetChildren()) do
+    if isOldStandalone(gui) then gui:Destroy() end
+end
+local screen
 local alive = true
 local conns = {}
 local Hub = {}
 local identityHidden = options.HideUsername ~= false
 local welcomeLabels = {}
 local function on(signal, handler)
-local c = signal:Connect(handler)
+local c = signal:Connect(function(...)
+    if alive and screen and screen.Parent == pg then
+        handler(...)
+    end
+end)
 table.insert(conns, c)
 return c
 end
@@ -121,24 +142,30 @@ TextSize = 12,
 AutoButtonColor = false
 }), 8)
 end
-local screen = ui("ScreenGui", nil, {
-Name = "AgonyHubV118",
+screen = ui("ScreenGui", nil, {
+Name = rootName,
 ResetOnSpawn = false,
 IgnoreGuiInset = true,
 DisplayOrder = 2147483646,
 ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 })
-local floating = ui("ScreenGui", nil, {
-Name = "AgonyFloatingGUI",
-ResetOnSpawn = false,
-IgnoreGuiInset = true,
-DisplayOrder = 2147483647,
-ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-})
-screen.Name = options.Id or "AgonyHubUI"
-floating.Name = screen.Name .. "Floating"
+screen:SetAttribute("AgonyStandaloneUI", true)
+-- The main window, loading splash and floating button share ONE ScreenGui.
+local function dispose(rootAlreadyDestroying)
+    if not alive then return end
+    alive = false
+    for _, connection in ipairs(conns) do
+        pcall(function() connection:Disconnect() end)
+    end
+    table.clear(conns)
+    if not rootAlreadyDestroying then screen:Destroy() end
+end
+-- Connect directly: this handler must run even after the root is unparented.
+table.insert(conns, screen.Destroying:Connect(function() dispose(true) end))
+table.insert(conns, screen.AncestryChanged:Connect(function()
+    if screen.Parent ~= pg then dispose(false) end
+end))
 screen.Parent = pg
-floating.Parent = pg
 local loading = rounded(ui("Frame", screen, {
 Size = UDim2.fromOffset(350, 190),
 AnchorPoint = Vector2.new(0.5, 0.5),
@@ -820,8 +847,10 @@ ZIndex = 3
 draggable(window, dragBar, false)
 local float = rounded(ui(
 "ImageButton",
-floating,
+screen,
 {
+Name = "AgonyFloatingButton",
+ZIndex = 20,
 Size = UDim2.fromOffset(56, 56),
 Position = UDim2.new(0, 20, 0.5, -28),
 BackgroundColor3 = C.selected,
@@ -843,6 +872,7 @@ nil,
 16
 )
 fallbackFloat.TextColor3 = C.white
+fallbackFloat.ZIndex = 21
 gradient(float, Color3.fromRGB(255,80,103), Color3.fromRGB(120,32,56), 45)
 float.BackgroundColor3 = Color3.new(1,1,1)
 fallbackFloat.TextXAlignment =
@@ -916,12 +946,12 @@ if not resolvedLogo and type(options.LogoURL)=="string" and options.LogoURL~="" 
         end
         if type(asset)~="string" or asset=="" then
             local ok,body=pcall(function() return game:HttpGet(options.LogoURL) end)
-            if ok and type(body)=="string" and body:sub(2,4)=="PNG" then
+            if alive and screen.Parent == pg and ok and type(body)=="string" and body:sub(2,4)=="PNG" then
                 local saved=pcall(writefile,path,body)
                 if saved then local good,v=pcall(assetFn,path);if good then asset=v end end
             end
         end
-        if not alive or type(asset)~="string" or asset=="" then return end
+        if not alive or screen.Parent ~= pg or type(asset)~="string" or asset=="" then return end
         resolvedLogo=asset
         for _,pair in ipairs(logoPairs) do
             if pair[1].Parent and pair[2].Parent then displayImage(pair[1],pair[2],asset) end
@@ -1000,11 +1030,7 @@ function Hub:SetVisible(value)
     if float.Visible then window.Visible = value == true end
 end
 function Hub:Destroy()
-    if not alive then return end
-    alive = false
-    for _, connection in ipairs(conns) do connection:Disconnect() end
-    screen:Destroy()
-    floating:Destroy()
+    dispose(false)
 end
 -- Live dashboard; metrics are local and no network requests are sent.
 function Hub:Dashboard(tab)
@@ -1098,7 +1124,7 @@ Hub.Theme = C
 local duration = math.max(0, tonumber(options.LoadingTime) or 10)
 local started = os.clock()
 local function finish()
-    if not alive then return end
+    if not alive or screen.Parent ~= pg then return end
     loading:Destroy()
     float.Visible = true
     if options.OpenOnLoad then window.Visible = true end
@@ -1107,7 +1133,7 @@ if duration == 0 then
     finish()
 else
     task.spawn(function()
-        while alive do
+        while alive and screen.Parent == pg do
             local progress = math.clamp((os.clock() - started) / duration, 0, 1)
             barFill.Size = UDim2.fromScale(progress, 1)
             barLabel.Text = "Loading... " .. tostring(math.floor(progress * 100)) .. "%"
