@@ -113,47 +113,67 @@ end
 -- One visual at a time: never paint a fallback over a loaded image.
 local imageRequests = setmetatable({}, {__mode="k"})
 local ContentProvider = game:GetService("ContentProvider")
-local function displayImage(image, fallback, uri)
+local function displayImage(image, fallback, uri, alternate, trustedLocal)
     if not uri then return end
     local request = (imageRequests[image] or 0) + 1
     imageRequests[image] = request
     local function valid()
         return alive and image.Parent and fallback.Parent and imageRequests[image] == request
     end
-    local loaded = false
-    local function paint(ready)
-        if not valid() then return end
-        loaded = ready
-        -- ImageTransparency, not Visible: some images contain their fallback.
-        if ready then
-            fallback.Visible = false
-            image.ImageTransparency = 0
-        else
-            image.ImageTransparency = 1
-            fallback.Visible = true
-        end
+    -- Local cached brand artwork already has a resolved content URI. Some
+    -- clients render it but do not emit a reliable IsLoaded transition.
+    if trustedLocal then
+        local ok=pcall(function() image.Image=uri end)
+        if ok then fallback.Visible=false; image.ImageTransparency=0 end
+        return
     end
-    paint(false)
-    local ok = pcall(function() image.Image = uri end)
-    if not ok then return end
-    on(image:GetPropertyChangedSignal("IsLoaded"),function()
-        if valid() and image.IsLoaded then paint(true) end
-    end)
-    if image.IsLoaded then paint(true) end
+    local candidates={uri}
+    if alternate and alternate~=uri then table.insert(candidates,alternate) end
+    fallback.Visible=false
+    image.ImageTransparency=0
     task.spawn(function()
-        pcall(function()
-            ContentProvider:PreloadAsync({image}, function(_, status)
-                if valid() and status == Enum.AssetFetchStatus.Success then paint(true) end
+        for _,candidate in ipairs(candidates) do
+            if not valid() then return end
+            local ok=pcall(function() image.Image=candidate end)
+            if ok then
+                local loaded=false
+                task.spawn(function()
+                    pcall(function()
+                        ContentProvider:PreloadAsync({candidate},function(_,status)
+                            if status==Enum.AssetFetchStatus.Success then loaded=true end
+                        end)
+                    end)
+                end)
+                local untilTime=os.clock()+5
+                repeat
+                    if not valid() then return end
+                    if image.Image==candidate and (image.IsLoaded or loaded) then
+                        fallback.Visible=false; image.ImageTransparency=0; return
+                    end
+                    task.wait(0.1)
+                until os.clock()>=untilTime
+            end
+        end
+        if valid() then
+            -- Continue listening for slow loads; never display both visuals.
+            fallback.Visible=true; image.ImageTransparency=1
+            on(image:GetPropertyChangedSignal("IsLoaded"),function()
+                if valid() and image.IsLoaded then
+                    fallback.Visible=false; image.ImageTransparency=0
+                end
             end)
-        end)
-        if valid() and image.IsLoaded and not loaded then paint(true) end
+            if image.IsLoaded then fallback.Visible=false; image.ImageTransparency=0 end
+            warn("[AGONY UI] Image not confirmed loaded:",uri)
+        end
     end)
 end
-local function addIcon(parent, fallback, value, size, pos, tint)
+local function addIcon(parent, fallback, value, size, pos, tint, thumbnailFallback)
     local uri=imageURI(value)
     if not uri then return nil end
     local image=ui("ImageLabel",parent,{Size=size,Position=pos,BackgroundTransparency=1,Image="",ScaleType=Enum.ScaleType.Fit,ImageColor3=tint or Color3.new(1,1,1)})
-    displayImage(image,fallback,uri)
+    local id=uri:match("^rbxassetid://(%d+)$")
+    local alternate=thumbnailFallback and id and ("rbxthumb://type=Asset&id="..id.."&w=150&h=150") or nil
+    displayImage(image,fallback,uri,alternate)
     return image
 end
 local function button(parent, str, size, pos)
@@ -502,12 +522,17 @@ local function showLink(name,url)
     local valid=currentLink:match("^https://%S+$")~=nil
     if not valid then currentLink="" end
     linkHeading.Text=name
-    linkHelp.Text=valid and "Choose Open or Copy. Browser opening depends on your host." or "Community link not configured yet."
+    local canOpen=valid and type(options.OpenURL)=="function"
+    linkHelp.Text=valid and (canOpen and "Choose Open or Copy." or "Direct browser opening is unavailable in this client.") or "Community link not configured yet."
     linkBox.Text=currentLink
     linkBox.Visible=valid
     copyButton.Visible=valid
     openButton.Visible=valid
-    openButton.Text="OPEN LINK"
+    openButton.Text=canOpen and "OPEN LINK" or "OPEN UNAVAILABLE"
+    openButton.Active=canOpen
+    openButton.Selectable=canOpen
+    openButton.TextColor3=canOpen and C.white or C.muted
+    openButton.BackgroundColor3=canOpen and C.selected or C.deep
     copyButton.Text="COPY LINK"
     linkOverlay.Visible=true
 end
@@ -520,7 +545,7 @@ on(openButton.Activated,function()
         return
     end
     local ok,result=pcall(opener,currentLink)
-    if ok and result~=false then
+    if ok and result==true then
         linkHelp.Text="Browser request sent."
     else
         linkHelp.Text="Could not open browser. Use Copy Link instead."
@@ -545,35 +570,11 @@ local function communityButton(name,caption,url,y,accent,monogram)
     b.BackgroundColor3=C.deep
     stroke(b,C.line,0.45)
     local mark=rounded(ui("Frame",b,{Size=UDim2.fromOffset(32,32),Position=UDim2.fromOffset(6,6),BackgroundColor3=accent,BorderSizePixel=0}),6)
-    -- Native vector-style fallback: independent of external image permissions.
-    local symbol=ui("Frame",mark,{Name="BuiltInSymbol",Size=UDim2.fromScale(1,1),BackgroundTransparency=1})
-    local function part(x,y,w,h,color,r,rotation)
-        local f=rounded(ui("Frame",symbol,{Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(w,h),BackgroundColor3=color,BorderSizePixel=0,Rotation=rotation or 0}),r or 0)
-        return f
-    end
-    local white=Color3.new(1,1,1)
-    if name=="Discord" then
-        -- Stylized controller face, not a downloaded asset.
-        part(6,9,20,15,white,6)
-        part(6,8,7,9,white,3,-20)
-        part(19,8,7,9,white,3,20)
-        part(10,14,4,5,accent,4)
-        part(18,14,4,5,accent,4)
-        part(12,22,8,3,accent,2)
-    elseif name=="TikTok" then
-        local function note(dx,dy,color)
-            part(14+dx,6+dy,4,17,color,2)
-            part(16+dx,6+dy,8,5,color,2,24)
-            part(7+dx,18+dy,10,9,color,5)
-        end
-        note(-1,1,Color3.fromRGB(37,244,238))
-        note(1,0,Color3.fromRGB(254,44,85))
-        note(0,0,white)
-    else
-        local letter=label(symbol,monogram,UDim2.fromScale(1,1),nil,22)
-        letter.TextXAlignment=Enum.TextXAlignment.Center
-    end
-    addIcon(mark,symbol,(options.CommunityIcons or {})[name],UDim2.new(1,-4,1,-4),UDim2.fromOffset(2,2))
+    -- Clean monogram only if the real icon cannot be loaded.
+    local symbol=label(mark,monogram,UDim2.fromScale(1,1),nil,21)
+    symbol.TextXAlignment=Enum.TextXAlignment.Center
+    symbol.TextColor3=C.white
+    addIcon(mark,symbol,(options.CommunityIcons or {})[name],UDim2.new(1,-4,1,-4),UDim2.fromOffset(2,2),nil,true)
     local t=label(b,name,UDim2.new(1,-65,0,20),UDim2.fromOffset(46,3),13)
     t.TextTruncate=Enum.TextTruncate.AtEnd
     local subtext=label(b,caption,UDim2.new(1,-65,0,17),UDim2.fromOffset(46,24),10)
@@ -995,9 +996,10 @@ end
 -- still works when remote assets/local custom asset APIs are not available.
 local logoPairs={}
 local resolvedLogo=imageURI(options.Logo)
+local brandIsLocal=false
 local function registerLogo(image,fallback)
     table.insert(logoPairs,{image,fallback})
-    if resolvedLogo then displayImage(image,fallback,resolvedLogo) end
+    if resolvedLogo then displayImage(image,fallback,resolvedLogo,nil,brandIsLocal) end
 end
 registerLogo(logoLoading,fallbackLoading)
 registerLogo(sideLogo,fallbackSide)
@@ -1026,8 +1028,9 @@ if not resolvedLogo and type(options.LogoURL)=="string" and options.LogoURL~="" 
         end
         if not alive or screen.Parent ~= pg or type(asset)~="string" or asset=="" then return end
         resolvedLogo=asset
+        brandIsLocal=true
         for _,pair in ipairs(logoPairs) do
-            if pair[1].Parent and pair[2].Parent then displayImage(pair[1],pair[2],asset) end
+            if pair[1].Parent and pair[2].Parent then displayImage(pair[1],pair[2],asset,nil,true) end
         end
     end)
 end
@@ -1229,15 +1232,17 @@ local Hub = AgonyUI.Create({
     HideUsername = true,
     -- Optional authorized host callback: OpenURL = function(url) ... end,
     -- Roblox LocalScripts do not have a general-purpose browser-opening API.
+    -- For published experiences, use Roblox Social Links on the detail page.
+    -- OpenURL must explicitly return true only when an authorized host opens the URL.
     DiscordURL = "https://discord.gg/PNrfkj73eT",
     TikTokURL = "https://www.tiktok.com/@mrpopscle12?is_from_webapp=1&sender_device=pc",
     Tabs = {"Home", "Main", "Farm", "Egg", "Event", "Island", "Boss", "Trade", "Settings"},
     Descriptions = {Main = "Main features", Farm = "Game features", Settings = "Preferences"},
     OpenOnLoad = true,
     LoadingTime = 10,
-    Logo = "", -- Roblox image asset ID (preferred); e.g. "rbxassetid://123456789"
+    Logo = "", -- Use the uploaded AGONY image Texture ID for native loading on all clients.
     LogoURL = "https://raw.githubusercontent.com/mrpopsicle12/AgonyHubAssets/main/agony.png", -- original project logo; optional fallback
-    CommunityIcons = {
+    CommunityIcons = { -- Use actual image / Texture IDs; decal thumbnails are a fallback.
         Discord = "rbxassetid://118812867465194",
         TikTok = "rbxassetid://109900625431595",
     },
