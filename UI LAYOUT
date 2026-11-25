@@ -301,7 +301,7 @@ local tabScroll = ui("ScrollingFrame", side, {
 Name = "AgonyTabScroll",
 Active = true,
 ScrollingEnabled = true,
-Size = UDim2.new(1, -20, 1, -292),
+Size = UDim2.new(1, -20, 1, -104),
 Position = UDim2.fromOffset(10, 92),
 BackgroundTransparency = 1,
 BorderSizePixel = 0,
@@ -334,42 +334,33 @@ on(b.MouseEnter,function() if not rail.Visible then animate(b,{BackgroundColor3=
 on(b.MouseLeave,function() if not rail.Visible then animate(b,{BackgroundColor3=C.card}) end end)
 end
 end
-local profile = rounded(ui("Frame", side, {
-Size = UDim2.new(1, -20, 0, 51),
-Position = UDim2.new(0, 10, 1, -75),
-BackgroundColor3 = C.card,
-BorderSizePixel = 0
-}), 8)
-local avatar = rounded(ui("ImageLabel", profile, {
-Size = UDim2.fromOffset(36, 36),
-Position = UDim2.fromOffset(7, 7),
-BackgroundTransparency = 1
-}), 17)
-local username = label(
-profile,
-"********",
-UDim2.new(1, -95, 0, 23),
-UDim2.fromOffset(49, 5),
-11
-)
-username.TextTruncate =
-Enum.TextTruncate.AtEnd
-username.TextYAlignment =
-Enum.TextYAlignment.Center
-local profileCaption = label(profile, "LOCAL PLAYER", UDim2.new(1,-53,0,16), UDim2.fromOffset(49,27),9)
-profileCaption.TextColor3 = C.red
+-- Home cards are built once and mounted beneath the metrics, never in the sidebar.
+local profile = rounded(ui("Frame", window, {
+    Size=UDim2.new(0.5,-4,1,0), BackgroundColor3=C.card,
+    BorderSizePixel=0, Visible=false
+}),10)
 stroke(profile,C.line,0.15)
-local privateAvatar = rounded(ui("Frame", profile, {
-    Size=UDim2.fromOffset(36,36), Position=UDim2.fromOffset(7,7),
-    BackgroundColor3=C.selected, BorderSizePixel=0
-}), 17)
-local privateIcon=label(privateAvatar,"AG",UDim2.fromScale(1,1),nil,12)
+local profileTitle=label(profile,"PLAYER PROFILE",UDim2.new(1,-90,0,20),UDim2.fromOffset(12,7),11)
+profileTitle.TextColor3=C.red
+local avatar=rounded(ui("ImageLabel",profile,{
+    Size=UDim2.fromOffset(51,51),Position=UDim2.fromOffset(12,35),BackgroundTransparency=1
+}),12)
+local privateAvatar=rounded(ui("Frame",profile,{
+    Size=UDim2.fromOffset(51,51),Position=UDim2.fromOffset(12,35),BackgroundColor3=C.selected,BorderSizePixel=0
+}),12)
+stroke(privateAvatar,C.red,0.35)
+local privateIcon=label(privateAvatar,"AG",UDim2.fromScale(1,1),nil,17)
 privateIcon.TextXAlignment=Enum.TextXAlignment.Center
-local privacyButton=button(profile,"SHOW",UDim2.fromOffset(40,21),UDim2.new(1,-43,0,5))
+local username=label(profile,"********",UDim2.new(1,-85,0,24),UDim2.fromOffset(73,37),15)
+username.TextTruncate=Enum.TextTruncate.AtEnd
+local profileCaption=label(profile,"PRIVATE MODE",UDim2.new(1,-85,0,20),UDim2.fromOffset(73,62),10)
+profileCaption.TextColor3=C.red
+local privacyButton=button(profile,"SHOW",UDim2.fromOffset(57,21),UDim2.new(1,-69,0,8))
 privacyButton.TextSize=9
 privacyButton.BackgroundColor3=C.selected
 stroke(privacyButton,C.red,0.45)
-profileCaption.TextSize=8
+local privacyHint=label(profile,"Identity controls",UDim2.new(1,-24,0,18),UDim2.fromOffset(12,100),10)
+privacyHint.TextColor3=C.muted
 local function refreshPrivacy()
     username.Text = identityHidden and "********" or ("@" .. player.Name)
     avatar.Visible = not identityHidden
@@ -388,14 +379,14 @@ on(privacyButton.Activated,function() Hub:SetPrivacy(not identityHidden) end)
 refreshPrivacy()
 
 -- Community links. No URLs are invented; configure them at the bottom.
-local credits=rounded(ui("Frame",side,{
-    Size=UDim2.new(1,-20,0,111),Position=UDim2.new(0,10,1,-194),
-    BackgroundColor3=C.card,BorderSizePixel=0
-}),9)
+local credits=rounded(ui("Frame",window,{
+    Size=UDim2.new(0.5,-4,1,0),Position=UDim2.new(0.5,4,0,0),
+    BackgroundColor3=C.card,BorderSizePixel=0,Visible=false
+}),10)
 stroke(credits,C.line,0.2)
-local creditsHeading=label(credits,"//  CREDITS",UDim2.new(1,-16,0,18),UDim2.fromOffset(8,4),10)
+local creditsHeading=label(credits,"CREDITS / COMMUNITY",UDim2.new(1,-24,0,20),UDim2.fromOffset(12,7),11)
 creditsHeading.TextColor3=C.red
-local developerLabel=label(credits,"Developed by "..tostring(options.Developer or "mrpopsicle12"),UDim2.new(1,-16,0,17),UDim2.fromOffset(8,21),9)
+local developerLabel=label(credits,"Developed by "..tostring(options.Developer or "mrpopsicle12"),UDim2.new(1,-24,0,17),UDim2.fromOffset(12,101),10)
 developerLabel.TextTruncate=Enum.TextTruncate.AtEnd
 local linkOverlay=ui("Frame",window,{Size=UDim2.fromScale(1,1),BackgroundColor3=C.bg,BackgroundTransparency=0.2,BorderSizePixel=0,Visible=false,ZIndex=50,Active=true})
 rounded(linkOverlay,12)
@@ -446,27 +437,26 @@ on(copyButton.Activated,function()
     linkHelp.Text="Copy the selected link, then open it in your browser or app."
 end)
 on(linkBox.FocusLost,function() linkBox.Text=currentLink;linkBox.TextEditable=false end)
-local function communityButton(name,caption,url,y)
-    local b=button(credits,"",UDim2.new(1,-12,0,30),UDim2.fromOffset(6,y))
+local function communityButton(name,caption,url,y,accent,monogram)
+    local b=button(credits,"",UDim2.new(1,-24,0,30),UDim2.fromOffset(12,y))
     b.BackgroundColor3=C.deep
-    local t=label(b,name,UDim2.new(1,-48,0,15),UDim2.fromOffset(8,1),11)
-    local subtext=label(b,caption,UDim2.new(1,-48,0,12),UDim2.fromOffset(8,15),8)
+    stroke(b,C.line,0.45)
+    local mark=rounded(ui("Frame",b,{Size=UDim2.fromOffset(22,22),Position=UDim2.fromOffset(4,4),BackgroundColor3=accent,BorderSizePixel=0}),6)
+    local letter=label(mark,monogram,UDim2.fromScale(1,1),nil,12)
+    letter.TextXAlignment=Enum.TextXAlignment.Center
+    local t=label(b,name,UDim2.new(0.45,-15,1,0),UDim2.fromOffset(34,0),11)
+    t.TextTruncate=Enum.TextTruncate.AtEnd
+    local subtext=label(b,caption,UDim2.new(0.55,-30,1,0),UDim2.new(0.45,8,0,0),9)
     subtext.TextColor3=C.muted
-    local arrow=label(b,">",UDim2.fromOffset(18,30),UDim2.new(1,-22,0,0),13)
+    subtext.TextXAlignment=Enum.TextXAlignment.Right
+    subtext.TextTruncate=Enum.TextTruncate.AtEnd
+    local arrow=label(b,">",UDim2.fromOffset(16,30),UDim2.new(1,-17,0,0),13)
     arrow.TextColor3=C.red
     on(b.Activated,function() showLink(name,url) end)
 end
-communityButton("Discord","Join community",options.DiscordURL,40)
-communityButton("TikTok","Follow creator",options.TikTokURL,74)
+communityButton("Discord","Join",options.DiscordURL,32,Color3.fromRGB(88,101,242),"D")
+communityButton("TikTok","Follow",options.TikTokURL,66,Color3.fromRGB(197,37,65),"T")
 
-local credit = label(
-side,
-"by " .. tostring(options.Developer or "mrpopsicle12"),
-UDim2.fromOffset(165, 14),
-UDim2.new(0, 12, 1, -18),
-8
-)
-credit.TextColor3 = C.muted
 task.spawn(function()
 local ok, image = pcall(function()
 return Players:GetUserThumbnailAsync(
@@ -947,24 +937,69 @@ end
 -- Live dashboard; metrics are local and no network requests are sent.
 function Hub:Dashboard(tab)
     local page=pageFor(tab)
-    local hero=rounded(ui("Frame",page,{Size=UDim2.new(1,-5,0,110),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true}),12)
-    gradient(hero,Color3.fromRGB(79,19,34),Color3.fromRGB(25,16,24),18)
-    stroke(hero,C.red,0.35)
-    for i=1,4 do
-        rounded(ui("Frame",hero,{Size=UDim2.fromOffset(33,190),Position=UDim2.new(1,-12-i*36,0,-35),Rotation=28,BackgroundColor3=C.red,BackgroundTransparency=0.88,BorderSizePixel=0}),4)
+    if self.HomeBuilt then return end
+    self.HomeBuilt=true
+    local hero=rounded(ui("Frame",page,{Size=UDim2.new(1,-5,0,104),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true}),12)
+    gradient(hero,Color3.fromRGB(31,10,18),Color3.fromRGB(100,9,20),12)
+    local heroEdge=stroke(hero,C.red,0.25)
+    -- BLOODFIRE: procedural flame ribbons and drifting embers, no asset downloads.
+    local art=ui("Frame",hero,{Size=UDim2.new(0.42,0,1,0),Position=UDim2.fromScale(0.58,0),BackgroundTransparency=1,ClipsDescendants=true})
+    local aura=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.65,0.88),Size=UDim2.fromOffset(196,115),BackgroundColor3=Color3.fromRGB(210,22,36),BackgroundTransparency=0.55,BorderSizePixel=0}),100)
+    local ag=gradient(aura,Color3.fromRGB(70,0,10),Color3.fromRGB(255,70,27),90)
+    ag.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(0.55,0.45),NumberSequenceKeypoint.new(1,0)})
+    local tongues={}
+    for i=1,9 do
+        local h=48+(i*23)%80
+        local x=0.18+i*0.075
+        local flame=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,1),Position=UDim2.fromScale(x,1.22),Size=UDim2.fromOffset(17+(i%3)*7,h),Rotation=-24+(i*11)%43,BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0}),18)
+        local g=ui("UIGradient",flame,{Rotation=90,Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(120,0,21)),ColorSequenceKeypoint.new(0.42,C.red),ColorSequenceKeypoint.new(0.78,Color3.fromRGB(255,76,20)),ColorSequenceKeypoint.new(1,Color3.fromRGB(255,199,94))}),Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(0.28,0.28),NumberSequenceKeypoint.new(0.7,0.02),NumberSequenceKeypoint.new(1,0.1)})})
+        tongues[i]={frame=flame,h=h,x=x,rot=flame.Rotation}
     end
-    local word=label(hero,"A G O N Y  /  C R I M S O N",UDim2.new(1,-24,0,17),UDim2.fromOffset(15,11),10)
+    local sparks={}
+    for i=1,14 do
+        local dot=rounded(ui("Frame",art,{Size=UDim2.fromOffset(2+i%3,2+i%3),BackgroundColor3=i%3==0 and C.amber or C.red,BorderSizePixel=0,Rotation=45}),2)
+        sparks[i]=dot
+    end
+    local mark=label(art,"A",UDim2.fromScale(0.55,0.84),UDim2.fromScale(0.35,0.04),58)
+    mark.TextXAlignment=Enum.TextXAlignment.Center
+    mark.TextColor3=Color3.fromRGB(255,222,203)
+    mark.TextTransparency=0.12
+    mark.TextStrokeColor3=C.red
+    mark.TextStrokeTransparency=0.15
+    local sig=label(art,"BLOODFIRE",UDim2.fromScale(0.78,0.2),UDim2.fromScale(0.23,0.77),10)
+    sig.TextXAlignment=Enum.TextXAlignment.Center;sig.TextColor3=C.amber
+    local word=label(hero,"A G O N Y  /  B L O O D F I R E",UDim2.new(0.64,-18,0,17),UDim2.fromOffset(15,9),10)
     word.TextColor3=C.red
-    local welcome=label(hero,"",UDim2.new(1,-32,0,35),UDim2.fromOffset(15,29),23)
+    local welcome=label(hero,"",UDim2.new(0.63,-18,0,35),UDim2.fromOffset(15,27),23)
     welcome.TextTruncate=Enum.TextTruncate.AtEnd
     table.insert(welcomeLabels,welcome)
     refreshPrivacy()
-    local tagline=label(hero,options.GameName or "Universal control center",UDim2.new(1,-32,0,22),UDim2.fromOffset(16,66),12)
-    tagline.TextColor3=C.muted
-    local marker=ui("Frame",hero,{Size=UDim2.fromOffset(72,3),Position=UDim2.fromOffset(16,96),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
+    local tagline=label(hero,options.GameName or "Universal control center",UDim2.new(0.63,-18,0,20),UDim2.fromOffset(16,63),12)
+    tagline.TextColor3=Color3.fromRGB(222,161,165)
+    tagline.TextTruncate=Enum.TextTruncate.AtEnd
+    local marker=ui("Frame",hero,{Size=UDim2.fromOffset(100,3),Position=UDim2.fromOffset(16,91),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
     gradient(marker,C.red,C.amber)
+    local fireTime,fireAccum=0,0
+    on(Run.Heartbeat,function(dt)
+        if not alive or not window.Visible or not page.Visible then return end
+        fireTime=fireTime+dt;fireAccum=fireAccum+dt
+        if fireAccum<1/12 then return end
+        fireAccum=0
+        for i,f in ipairs(tongues) do
+            local wave=math.sin(fireTime*3+i*1.8)
+            f.frame.Size=UDim2.fromOffset(17+(i%3)*7,f.h+wave*12)
+            f.frame.Position=UDim2.fromScale(f.x+wave*0.012,1.22)
+            f.frame.Rotation=f.rot+wave*7
+        end
+        for i,dot in ipairs(sparks) do
+            local progress=(fireTime*(0.25+(i%4)*0.07)+i*0.173)%1
+            dot.Position=UDim2.fromScale(0.13+((i*37)%73)/100+math.sin(fireTime*2+i)*0.035,1-progress)
+            dot.BackgroundTransparency=0.12+progress*0.82
+        end
+        heroEdge.Transparency=0.28+0.12*math.sin(fireTime*2.4)
+    end)
     Hub:Section(tab,"LIVE TELEMETRY")
-    local metrics=ui("Frame",page,{Size=UDim2.new(1,-5,0,86),BackgroundTransparency=1})
+    local metrics=ui("Frame",page,{Size=UDim2.new(1,-5,0,82),BackgroundTransparency=1})
     ui("UIListLayout",metrics,{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,8),SortOrder=Enum.SortOrder.LayoutOrder})
     local function metric(index,name,caption,color)
         local f=rounded(ui("Frame",metrics,{Size=UDim2.new(0.25,-6,1,0),LayoutOrder=index,BackgroundColor3=C.card,BorderSizePixel=0}),10)
@@ -978,17 +1013,11 @@ function Hub:Dashboard(tab)
     local ping,pingRating=metric(2,"PING","MEASURING...",C.amber)
     local count=metric(3,"SERVER","players",C.green)
     local elapsed=metric(4,"SESSION","hub uptime",C.white)
-    Hub:Section(tab,"QUICK NAVIGATION")
-    local quick=ui("Frame",page,{Size=UDim2.new(1,-5,0,math.max(34,math.ceil(math.min(#names-1,4)/2)*40-6)),BackgroundTransparency=1})
-    ui("UIGridLayout",quick,{CellSize=UDim2.new(0.5,-4,0,34),CellPadding=UDim2.fromOffset(8,6),SortOrder=Enum.SortOrder.LayoutOrder})
-    local added=0
-    for _, name in ipairs(names) do
-        if name~=tab and added<4 then
-            added = added + 1
-            local b=button(quick,name.."  >",UDim2.new());b.LayoutOrder=added;stroke(b,C.line,0.25)
-            on(b.Activated,function() showPage(name) end)
-        end
-    end
+    local homeCards=ui("Frame",page,{Size=UDim2.new(1,-5,0,128),BackgroundTransparency=1})
+    profile.Parent=homeCards
+    profile.Visible=true
+    credits.Parent=homeCards
+    credits.Visible=true
     local frames, seconds, started=0,0,os.clock()
     on(Run.RenderStepped,function(dt)
         frames = frames + 1;seconds = seconds + dt
@@ -1054,7 +1083,7 @@ end)()
 
 -- EDIT ONLY THIS SECTION FOR EACH GAME.
 local Hub = AgonyUI.Create({
-    Version = "CRIMSON 1.1",
+    Version = "CRIMSON 1.2",
     Developer = "mrpopsicle12",
     HideUsername = true,
     DiscordURL = "", -- paste your exact Discord invite URL
@@ -1066,7 +1095,7 @@ local Hub = AgonyUI.Create({
     LoadingTime = 10,
     -- Logo = 123456789, -- optional Roblox image asset ID
 })
-Hub:Dashboard("Home")
+Hub:Home("Home")
 Hub:Section("Main", "Features")
 Hub:Toggle("Main", "Example Toggle", false, function(enabled)
     print("Toggle:", enabled)
