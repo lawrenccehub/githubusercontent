@@ -1,5 +1,5 @@
 local AgonyUI = (function()
--- AGONY HUB / CRIMSON | standalone client UI
+-- AGONY HUB | standalone client UI
 -- UI only; standard Roblox client / ModuleScript. No game-specific logic.
 local Library = {}
 function Library.Create(options)
@@ -77,6 +77,36 @@ Font = Enum.Font.GothamBold,
 TextSize = font or 12,
 TextXAlignment = Enum.TextXAlignment.Left
 })
+end
+-- Accept a Roblox image asset ID (number or digits) or a Roblox asset URI.
+local function imageURI(value)
+    if type(value)=="number" then
+        if value>0 then return "rbxassetid://"..string.format("%.0f",value) end
+    elseif type(value)=="string" then
+        if value:match("^%d+$") and tonumber(value)>0 then return "rbxassetid://"..value end
+        if value:match("^rbxassetid://%d+$") then return value end
+        if value:match("^rbxasset://") then return value end
+    end
+    return nil
+end
+local function displayImage(image, fallback, uri)
+    if not uri then return end
+    local ok=pcall(function() image.Image=uri end)
+    if not ok then return end
+    local function refresh()
+        if alive and image.Parent and fallback.Parent then
+            fallback.Visible=not image.IsLoaded
+        end
+    end
+    on(image:GetPropertyChangedSignal("IsLoaded"),refresh)
+    refresh()
+end
+local function addIcon(parent, fallback, value, size, pos, tint)
+    local uri=imageURI(value)
+    if not uri then return nil end
+    local image=ui("ImageLabel",parent,{Size=size,Position=pos,BackgroundTransparency=1,Image="",ScaleType=Enum.ScaleType.Fit,ImageColor3=tint or Color3.new(1,1,1)})
+    displayImage(image,fallback,uri)
+    return image
 end
 local function button(parent, str, size, pos)
 return rounded(ui("TextButton", parent, {
@@ -283,14 +313,16 @@ Transparency = 0.15
 })
 local version = label(
 side,
-tostring(options.Version or "1.0.0"),
+tostring(options.Version or ""),
 UDim2.fromOffset(120, 16),
 UDim2.fromOffset(63, 36),
 10
 )
 version.TextColor3 = C.blue
+version.Visible = version.Text ~= ""
+if not version.Visible then title.Position=UDim2.fromOffset(63,23) end
 stroke(sideLogo, C.red, 0.2)
-local navCaption = label(side, "  //  NAVIGATION", UDim2.fromOffset(164, 20), UDim2.fromOffset(12, 65), 10)
+local navCaption = label(side, "  NAVIGATION", UDim2.fromOffset(164, 20), UDim2.fromOffset(12, 65), 10)
 navCaption.TextColor3 = C.muted
 local tabs, tabDecor = {}, {}
 local names = options.Tabs or {"Main", "Settings"}
@@ -320,8 +352,11 @@ for i, name in ipairs(names) do
 assert(type(name) == "string" and not tabs[name], "Tab names must be unique strings")
 local b = button(tabScroll, "", UDim2.new(1, -5, 0, 39))
 b.LayoutOrder = i
-local index = label(b, string.format("%02d", i), UDim2.fromOffset(29,39), UDim2.fromOffset(10,0), 11)
+local symbols={Home="⌂",Settings="⚙",Main="▦",Farm="◆",Egg="◇",Boss="✦",Trade="⇄",Event="★",Island="⌖"}
+local index = label(b, symbols[name] or string.format("%02d", i), UDim2.fromOffset(24,39), UDim2.fromOffset(9,0), 15)
+index.TextXAlignment=Enum.TextXAlignment.Center
 index.TextColor3 = C.muted
+local tabIcon=addIcon(b,index, (options.TabIcons or {})[name],UDim2.fromOffset(20,20),UDim2.fromOffset(11,9))
 local text = label(b, name, UDim2.new(1,-57,1,0), UDim2.fromOffset(40,0), 13)
 text.TextTruncate = Enum.TextTruncate.AtEnd
 local rail = rounded(ui("Frame",b,{Size=UDim2.fromOffset(3,23),Position=UDim2.fromOffset(0,8),BackgroundColor3=C.red,BorderSizePixel=0,Visible=false}),2)
@@ -329,7 +364,7 @@ local arrow = label(b, ">", UDim2.fromOffset(13,39), UDim2.new(1,-17,0,0),12)
 arrow.TextColor3 = C.muted
 local outline = stroke(b,C.line,0.65)
 tabs[name] = b
-tabDecor[name] = {rail=rail,index=index,arrow=arrow,outline=outline,text=text}
+tabDecor[name] = {rail=rail,index=index,arrow=arrow,outline=outline,text=text,icon=tabIcon}
 on(b.MouseEnter,function() if not rail.Visible then animate(b,{BackgroundColor3=C.selected:Lerp(C.card,0.55)}) end end)
 on(b.MouseLeave,function() if not rail.Visible then animate(b,{BackgroundColor3=C.card}) end end)
 end
@@ -444,6 +479,7 @@ local function communityButton(name,caption,url,y,accent,monogram)
     local mark=rounded(ui("Frame",b,{Size=UDim2.fromOffset(32,32),Position=UDim2.fromOffset(6,6),BackgroundColor3=accent,BorderSizePixel=0}),6)
     local letter=label(mark,monogram,UDim2.fromScale(1,1),nil,16)
     letter.TextXAlignment=Enum.TextXAlignment.Center
+    addIcon(mark,letter,(options.CommunityIcons or {})[name],UDim2.new(1,-8,1,-8),UDim2.fromOffset(4,4))
     local t=label(b,name,UDim2.new(1,-65,0,20),UDim2.fromOffset(46,3),13)
     t.TextTruncate=Enum.TextTruncate.AtEnd
     local subtext=label(b,caption,UDim2.new(1,-65,0,17),UDim2.fromOffset(46,24),10)
@@ -714,7 +750,16 @@ decor.index.TextColor3=active and C.red or C.muted
 decor.arrow.TextColor3=active and C.red or C.muted
 end
 heading.Text = name
-sub.Text = desc[name] or ""
+sub.Text = name=="Home" and "" or (desc[name] or "")
+sub.Visible = sub.Text ~= ""
+heading.Position=UDim2.fromOffset(17,sub.Visible and 12 or 18)
+if name=="Home" then
+    topLine.Position=UDim2.fromOffset(16,55)
+    pages[name].Position=UDim2.fromOffset(16,66)
+    pages[name].Size=UDim2.new(1,-32,1,-78)
+else
+    topLine.Position=UDim2.fromOffset(16,65)
+end
 end
 for name, b in pairs(tabs) do
 on(b.Activated, function()
@@ -848,14 +893,45 @@ do
     end)
 end
 
--- Supply a Roblox image asset ID or URI; otherwise keep the original AG fallback.
-local logo = options.Logo
-if type(logo) == "number" then logo = "rbxassetid://" .. tostring(logo) end
-if type(logo) == "string" and logo ~= "" then
-    for _, pair in ipairs({{logoLoading, fallbackLoading}, {sideLogo, fallbackSide}, {float, fallbackFloat}}) do
-        pair[1].Image = logo
-        pair[2].Visible = false
-    end
+-- Original logo source from the previous AGONY HUB project. Optional; the UI
+-- still works when remote assets/local custom asset APIs are not available.
+local logoPairs={}
+local resolvedLogo=imageURI(options.Logo)
+local function registerLogo(image,fallback)
+    table.insert(logoPairs,{image,fallback})
+    if resolvedLogo then displayImage(image,fallback,resolvedLogo) end
+end
+registerLogo(logoLoading,fallbackLoading)
+registerLogo(sideLogo,fallbackSide)
+-- Keep the actual logo untinted on the floating icon.
+for _,child in ipairs(float:GetChildren()) do
+    if child:IsA("UIGradient") then child:Destroy() end
+end
+float.BackgroundColor3=C.selected
+registerLogo(float,fallbackFloat)
+if not resolvedLogo and type(options.LogoURL)=="string" and options.LogoURL~="" then
+    task.spawn(function()
+        local assetFn=type(getcustomasset)=="function" and getcustomasset or (type(getsynasset)=="function" and getsynasset or nil)
+        if not assetFn or type(writefile)~="function" then return end
+        local path="AGONY_HUB_LOGO.png"
+        local asset
+        if type(isfile)=="function" then
+            local ok,exists=pcall(isfile,path)
+            if ok and exists then local good,v=pcall(assetFn,path);if good then asset=v end end
+        end
+        if type(asset)~="string" or asset=="" then
+            local ok,body=pcall(function() return game:HttpGet(options.LogoURL) end)
+            if ok and type(body)=="string" and body:sub(2,4)=="PNG" then
+                local saved=pcall(writefile,path,body)
+                if saved then local good,v=pcall(assetFn,path);if good then asset=v end end
+            end
+        end
+        if not alive or type(asset)~="string" or asset=="" then return end
+        resolvedLogo=asset
+        for _,pair in ipairs(logoPairs) do
+            if pair[1].Parent and pair[2].Parent then displayImage(pair[1],pair[2],asset) end
+        end
+    end)
 end
 on(window:GetPropertyChangedSignal("Visible"), hideMenus)
 local cameraConnection
@@ -917,9 +993,9 @@ function Hub:Label(tab, name, value)
     t.Text = tostring(value or "")
     return t
 end
-function Hub:Section(tab, name)
+function Hub:Section(tab, name, prefix)
     local f=ui("Frame",pageFor(tab),{Size=UDim2.new(1,-5,0,29),BackgroundTransparency=1})
-    local t=label(f,"//  "..name,UDim2.new(1,-12,1,0),UDim2.fromOffset(8,0),12)
+    local t=label(f,(prefix==false and "" or "//  ")..name,UDim2.new(1,-12,1,0),UDim2.fromOffset(8,0),12)
     t.TextColor3=C.red
     return t
 end
@@ -943,83 +1019,22 @@ function Hub:Dashboard(tab)
     local hero=rounded(ui("Frame",page,{Size=UDim2.new(1,-5,0,110),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true}),12)
     gradient(hero,Color3.fromRGB(28,11,19),Color3.fromRGB(67,12,24),12)
     local heroEdge=stroke(hero,C.red,0.25)
-    -- AGONY MONSTER: a self-contained 3D mascot with no external assets.
-    local art=ui("Frame",hero,{Size=UDim2.new(0.42,0,1,0),Position=UDim2.fromScale(0.58,0),BackgroundTransparency=1,ClipsDescendants=true})
-    -- Eclipse rings behind the mascot; no flames or embers.
+    -- Logo showcase: no 3D models, monster, fire, or external UI framework.
+    local art=ui("Frame",hero,{Size=UDim2.new(0.37,0,1,0),Position=UDim2.fromScale(0.63,0),BackgroundTransparency=1,ClipsDescendants=true})
     for i=1,3 do
-        local ring=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.58,0.48),Size=UDim2.fromOffset(65+i*23,65+i*23),BackgroundTransparency=1,BorderSizePixel=0}),100)
-        stroke(ring,C.red,0.65+i*0.08,1)
+        local ring=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.53,0.5),Size=UDim2.fromOffset(64+i*22,64+i*22),BackgroundTransparency=1,BorderSizePixel=0}),100)
+        stroke(ring,C.red,0.66+i*0.08,1)
     end
     for i=1,3 do
-        local stripe=ui("Frame",art,{Size=UDim2.fromOffset(15,160),Position=UDim2.fromScale(0.12+i*0.22,-0.2),Rotation=28,BackgroundColor3=C.red,BackgroundTransparency=0.94,BorderSizePixel=0})
+        ui("Frame",art,{Size=UDim2.fromOffset(14,160),Position=UDim2.fromScale(0.12+i*0.22,-0.2),Rotation=28,BackgroundColor3=C.red,BackgroundTransparency=0.94,BorderSizePixel=0})
     end
-    local viewport=ui("ViewportFrame",art,{
-        Name="AgonyMonsterShowcase",Size=UDim2.fromScale(0.95,0.88),
-        Position=UDim2.fromScale(0.06,0),BackgroundTransparency=1,
-        BorderSizePixel=0,Ambient=Color3.fromRGB(165,132,143),
-        LightColor=Color3.fromRGB(255,215,222),LightDirection=Vector3.new(-1,-1,1),ZIndex=3
-    })
-    local world=ui("WorldModel",viewport,{Name="MonsterWorld"})
-    local camera=ui("Camera",viewport,{FieldOfView=32})
-    viewport.CurrentCamera=camera
-    local sig=label(art,"A G O N Y   M O N S T E R",UDim2.fromScale(0.96,0.16),UDim2.fromScale(0.04,0.82),9)
-    sig.TextXAlignment=Enum.TextXAlignment.Center;sig.TextColor3=C.red;sig.ZIndex=4
-    local rig=Instance.new("Model")
-    rig.Name="AgonyMonster"
-    local armor=Color3.fromRGB(49,37,48)
-    local obsidian=Color3.fromRGB(22,20,27)
-    local crimson=Color3.fromRGB(140,16,40)
-    local glow=Color3.fromRGB(255,48,77)
-    local glowing={}
-    local function part(name,size,x,y,z,color,rx,ry,rz,neon,kind,parent)
-        local p=Instance.new(kind or "Part")
-        p.Name=name;p.Size=size;p.Color=color;p.Anchored=true
-        p.CanCollide=false;p.CanTouch=false;p.CanQuery=false
-        p.Material=neon and Enum.Material.Neon or Enum.Material.SmoothPlastic
-        p.CFrame=CFrame.new(x,y,z)*CFrame.Angles(math.rad(rx or 0),math.rad(ry or 0),math.rad(rz or 0))
-        p.Parent=parent or rig
-        if neon then table.insert(glowing,p) end
-        return p
-    end
-    part("Torso",Vector3.new(2.3,2.1,1.25),0,3.05,0,obsidian)
-    part("ChestPlate",Vector3.new(1.85,1.45,0.28),0,3.24,-0.72,armor)
-    part("Core",Vector3.new(0.62,0.62,0.12),0,3.45,-0.9,glow,0,0,45,true)
-    part("Belt",Vector3.new(2.16,0.31,1.34),0,2.05,0,crimson)
-    part("Head",Vector3.new(1.64,1.35,1.27),0,4.74,0,armor)
-    part("Face",Vector3.new(1.48,0.79,0.15),0,4.66,-0.68,obsidian)
-    for _,s in ipairs({-1,1}) do
-        part("HornBase",Vector3.new(0.43,0.69,0.48),s*0.72,5.46,0,crimson,0,0,-s*22)
-        part("HornTip",Vector3.new(0.29,0.8,0.36),s*0.98,5.91,0,armor,0,0,-s*35,false,"WedgePart")
-        part("Eye",Vector3.new(0.44,0.17,0.12),s*0.38,4.9,-0.79,glow,0,0,s*14,true)
-        part("Brow",Vector3.new(0.59,0.15,0.12),s*0.38,5.04,-0.79,crimson,0,0,s*14)
-        part("Jaw",Vector3.new(0.27,0.37,0.22),s*0.58,4.31,-0.65,crimson,0,0,-s*12)
-        part("Fang",Vector3.new(0.12,0.24,0.12),s*0.25,4.47,-0.8,Color3.fromRGB(231,218,222),0,0,180,false,"WedgePart")
-        part("Leg",Vector3.new(0.92,1.55,1.02),s*0.58,1.18,0,obsidian)
-        part("Shin",Vector3.new(0.79,0.78,0.24),s*0.58,1.14,-0.53,armor)
-        part("Boot",Vector3.new(1.04,0.52,1.48),s*0.58,0.33,-0.18,crimson)
-    end
-    local arms={}
-    for _,s in ipairs({-1,1}) do
-        local arm=Instance.new("Model");arm.Name=s<0 and "LeftArm" or "RightArm";arm.Parent=rig
-        local shoulder=Vector3.new(s*1.55,3.75,0)
-        local main=part("Arm",Vector3.new(0.83,1.77,0.91),s*1.63,2.97,0,obsidian,0,0,s*6,false,nil,arm)
-        part("Shoulder",Vector3.new(1.04,0.62,1.18),s*1.55,3.69,0,crimson,0,0,s*9,false,nil,arm)
-        part("Spike",Vector3.new(0.34,0.63,0.47),s*1.82,4.17,0,armor,0,0,-s*24,false,"WedgePart",arm)
-        part("Gauntlet",Vector3.new(0.94,0.82,1.05),s*1.73,2.38,0,armor,0,0,s*6,false,nil,arm)
-        for j=1,3 do
-            part("Claw",Vector3.new(0.14,0.37,0.24),s*1.73+(j-2)*0.22,1.83,-0.24,crimson,0,0,180,false,"WedgePart",arm)
-        end
-        arm.WorldPivot=CFrame.new(shoulder)
-        arms[#arms+1]={model=arm,side=s}
-    end
-    rig.Parent=world
-    local box,size=rig:GetBoundingBox()
-    rig:PivotTo(CFrame.new(-box.Position)*rig:GetPivot())
-    local basePivot=rig:GetPivot()
-    for _,arm in ipairs(arms) do arm.offset=basePivot:ToObjectSpace(arm.model:GetPivot()) end
-    local distance=math.max(size.Y*0.62,size.X*0.48)/math.tan(math.rad(camera.FieldOfView/2))
-    camera.CFrame=CFrame.lookAt(Vector3.new(0,0.1,-distance),Vector3.new(0,0.1,0))
-    local word=label(hero,"A G O N Y  /  M O N S T E R",UDim2.new(0.64,-18,0,17),UDim2.fromOffset(15,9),10)
+    local badge=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.53,0.5),Size=UDim2.fromOffset(94,94),BackgroundColor3=C.deep,BackgroundTransparency=0.23,BorderSizePixel=0}),16)
+    stroke(badge,C.red,0.38,1.5)
+    local brand=ui("ImageLabel",badge,{Name="AgonyHubLogo",Size=UDim2.new(1,-8,1,-8),Position=UDim2.fromOffset(4,4),BackgroundTransparency=1,Image="",ScaleType=Enum.ScaleType.Fit})
+    local fallback=label(badge,"AG",UDim2.fromScale(1,1),nil,34)
+    fallback.TextXAlignment=Enum.TextXAlignment.Center;fallback.TextColor3=C.red
+    registerLogo(brand,fallback)
+    local word=label(hero,"A G O N Y  H U B",UDim2.new(0.64,-18,0,17),UDim2.fromOffset(15,9),10)
     word.TextColor3=C.red
     local welcome=label(hero,"",UDim2.new(0.63,-18,0,35),UDim2.fromOffset(15,27),23)
     welcome.TextTruncate=Enum.TextTruncate.AtEnd
@@ -1030,23 +1045,7 @@ function Hub:Dashboard(tab)
     tagline.TextTruncate=Enum.TextTruncate.AtEnd
     local marker=ui("Frame",hero,{Size=UDim2.fromOffset(100,3),Position=UDim2.fromOffset(16,91),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
     gradient(marker,C.red,C.amber)
-    local motionTime,motionAccum=0,0
-    on(Run.Heartbeat,function(dt)
-        if not alive or not window.Visible or not page.Visible then return end
-        motionTime=motionTime+dt;motionAccum=motionAccum+dt
-        if motionAccum<1/12 then return end
-        motionAccum=0
-        local pose=CFrame.new(0,math.sin(motionTime*2)*0.12,0)
-            *CFrame.Angles(0,math.sin(motionTime*1.1)*0.35,0)*basePivot
-        rig:PivotTo(pose)
-        for _,arm in ipairs(arms) do
-            arm.model:PivotTo(pose*arm.offset*CFrame.Angles(math.sin(motionTime*2.2+arm.side)*0.14,0,arm.side*(0.08+math.sin(motionTime*1.8)*0.07)))
-        end
-        local pulse=(math.sin(motionTime*2.7)+1)*0.5
-        for _,p in ipairs(glowing) do p.Color=glow:Lerp(Color3.fromRGB(255,156,174),pulse*0.55) end
-        heroEdge.Transparency=0.22+0.15*pulse
-    end)
-    Hub:Section(tab,"PERFORMANCE")
+    local performance=Hub:Section(tab,"PERFORMANCE",false)
     local metrics=ui("Frame",page,{Size=UDim2.new(1,-5,0,82),BackgroundTransparency=1})
     ui("UIListLayout",metrics,{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,8),SortOrder=Enum.SortOrder.LayoutOrder})
     local function metric(index,name,caption,color)
@@ -1131,17 +1130,29 @@ end)()
 
 -- EDIT ONLY THIS SECTION FOR EACH GAME.
 local Hub = AgonyUI.Create({
-    Version = "CRIMSON 1.4",
+    Version = "", -- set your game script version here, e.g. "11.9.110"
     Developer = "mrpopsicle12",
     HideUsername = true,
     DiscordURL = "", -- paste your exact Discord invite URL
     TikTokURL = "", -- paste your exact TikTok profile URL
     GameName = "Universal control center",
     Tabs = {"Home", "Main", "Farm", "Settings"},
-    Descriptions = {Home = "Your session at a glance", Main = "Main features", Farm = "Game features", Settings = "Preferences"},
+    Descriptions = {Main = "Main features", Farm = "Game features", Settings = "Preferences"},
     OpenOnLoad = true,
     LoadingTime = 10,
-    -- Logo = 123456789, -- optional Roblox image asset ID
+    Logo = "", -- Roblox image asset ID (preferred); e.g. "rbxassetid://123456789"
+    LogoURL = "https://raw.githubusercontent.com/mrpopsicle12/AgonyHubAssets/main/agony.png", -- original project logo; optional fallback
+    CommunityIcons = {
+        Discord = "", -- paste your uploaded Roblox image asset ID
+        TikTok = "",
+    },
+    TabIcons = {
+        Home = "",
+        Main = "",
+        Farm = "",
+        Settings = "",
+        -- Add more entries using the exact tab name.
+    },
 })
 Hub:Home("Home")
 Hub:Section("Main", "Features")
