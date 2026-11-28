@@ -2,8 +2,7 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 if game.PlaceId~=133151378618377 then warn("[AGONY HUB] Unsupported place");return end
 local CONFIG = {
     Stage = 1,
-    TweenSpeed = 100,
-    MinTweenSpeed = 20,
+    MinTweenSpeed = 16,
     MaxTweenSpeed = 150,
     PickupAckTimeout = 2.5,
     MinTweenDuration = 0.60,
@@ -41,78 +40,6 @@ local previous = env.AgonyAutoSteal
 if previous and type(previous.Stop) == "function" then
     pcall(previous.Stop)
 end
-local gameLogic={flags={},modules={},status={},next={},connections={},pending={},refused={},saved={},filters={}}
-function gameLogic.module(name,kind)
-    local shared=RS:FindFirstChild("Shared")
-    local parent=shared and shared:FindFirstChild(kind or "Configs")
-    local item=parent and parent:FindFirstChild(name)
-    if not item or not item:IsA("ModuleScript") then return nil end
-    if gameLogic.modules[item] then return gameLogic.modules[item] end
-    local ok,value=pcall(require,item)
-    if ok and type(value)=="table" then gameLogic.modules[item]=value;return value end
-end
-function gameLogic.data(key)
-    local shared=RS:FindFirstChild("Shared")
-    local modules=shared and shared:FindFirstChild("Modules")
-    local receiver=modules and modules:FindFirstChild("DataReceiver")
-    local item=receiver and receiver:FindFirstChild("PlayerData")
-    if not item then return nil end
-    local data=gameLogic.modules[item]
-    if not data then
-        local ok,value=pcall(require,item)
-        if not ok or type(value)~="table" then return nil end
-        data=value;gameLogic.modules[item]=value
-    end
-    if type(data.Get)~="function" then return nil end
-    local ok,value=pcall(data.Get,key)
-    if ok then return value end
-end
-function gameLogic.num(key) return tonumber(gameLogic.data(key)) end
-function gameLogic.records()
-    local inv=gameLogic.data("Inventory")
-    if type(inv)~="table" or type(inv.Packs)~="table" then return nil end
-    local result={}
-    for _,v in pairs(inv.Packs) do
-        if type(v)=="table" and type(v.Id)=="string" then table.insert(result,v) end
-    end
-    return result
-end
-function gameLogic.isCharacter(record)
-    local cfg=gameLogic.module("PacksConfig")
-    if not cfg or type(cfg.IsCharacter)~="function" then return nil end
-    local ok,value=pcall(cfg.IsCharacter,record)
-    if ok and type(value)=="boolean" then return value end
-end
-function gameLogic.placed(record)
-    return tonumber(record.RelativeX)~=nil and tonumber(record.RelativeZ)~=nil
-end
-function gameLogic.ownPlot()
-    local shared=RS:FindFirstChild("Shared")
-    local modules=shared and shared:FindFirstChild("Modules")
-    local receiver=modules and modules:FindFirstChild("DataReceiver")
-    local item=receiver and receiver:FindFirstChild("ServerData")
-    local plots=workspace:FindFirstChild("Plots")
-    if not plots then return nil end
-    if item then
-        local data=gameLogic.modules[item]
-        if not data then local ok,value=pcall(require,item);if ok and type(value)=="table" then data=value;gameLogic.modules[item]=value end end
-        if data and type(data.Get)=="function" then
-            local ok,records=pcall(data.Get,"Plots")
-            if ok and type(records)=="table" then
-                for _,record in pairs(records) do
-                    if type(record)=="table" and tonumber(record.Owner)==player.UserId then
-                        local plot=plots:FindFirstChild(tostring(record.Name))
-                        if plot then return plot end
-                    end
-                end
-            end
-        end
-    end
-    for _,model in ipairs(plots:GetChildren()) do
-        local plot=model.Name=="PlotModel" and model or model:FindFirstChild("PlotModel")
-        if plot and tonumber(plot:GetAttribute("PlotOwnerUserId"))==player.UserId then return model end
-    end
-end
 local running = false
 local requested = false
 local treadmillRequested = false
@@ -120,7 +47,6 @@ local boostEnabled = false
 local placeRequested = false
 local equipRequested = false
 local upgradeRequested = false
-local adaptiveSpeed = false
 local placeStatusLabel, equipStatusLabel, upgradeStatusLabel
 local function setStatus(label, value)
     if label and label.Parent then label.Text = value end
@@ -149,13 +75,13 @@ local disconnectPackWatch = function() end
 env.AgonyAutoSteal = controller
 local lastLog = {}
 local function log(message)
-    print("[AGONY Farm V26] " .. tostring(message))
+    print("[AGONY Farm V28] " .. tostring(message))
 end
 local function report(key, message)
     local now = os.clock()
     if not lastLog[key] or now - lastLog[key] >= 8 then
         lastLog[key] = now
-        warn("[AGONY Farm V26] " .. tostring(message))
+        warn("[AGONY Farm V28] " .. tostring(message))
     end
 end
 local function releasePrompt()
@@ -178,24 +104,12 @@ function controller.Stop()
     treadmillRequested = false
     boostEnabled = false
     disconnectPackWatch()
-    for _,connection in ipairs(gameLogic.connections) do pcall(function() connection:Disconnect() end) end
-    table.clear(gameLogic.connections)
-    if gameLogic.restoreGraphics then gameLogic.restoreGraphics() end
     pauseWorker()
 end
 function controller.SetStage(stage)
     assert(type(stage) == "number" and stage >= 1 and stage % 1 == 0, "Stage must be a positive integer")
     CONFIG.Stage = stage
     log("Selected Stage" .. stage)
-end
-function controller.SetTweenSpeed(value)
-    local number = tonumber(value)
-    if not number or number ~= number or number == math.huge or number == -math.huge then
-        return CONFIG.TweenSpeed, false
-    end
-    CONFIG.TweenSpeed = math.clamp(math.floor(number + 0.5), CONFIG.MinTweenSpeed, CONFIG.MaxTweenSpeed)
-    log("Tween speed: " .. CONFIG.TweenSpeed .. " studs/s (next movement)")
-    return CONFIG.TweenSpeed, true
 end
 local function root()
     local character = player.Character
@@ -263,8 +177,6 @@ local function choosePack(folder, hrp)
     local bestModel, bestPrompt, bestDistance = nil, nil, math.huge
     local bestFresh = false
     local bestHeight = -math.huge
-    local bestLuck = -math.huge
-    local cfg=gameLogic.module("PacksConfig")
     for _, model in ipairs(folder:GetChildren()) do
         if model:IsA("Model") and model.Name ~= "PackAreaRock" then
             local prompt = getPrompt(model)
@@ -274,17 +186,9 @@ local function choosePack(folder, hrp)
                 local fresh = freshPacks[model] == true
                 local proxy=model:FindFirstChild("ProxyPart")
                 local height=proxy and proxy:IsA("BasePart") and proxy.Position.Y or pos.Y
-                local luck=1
-                if cfg and type(cfg.Get)=="function" and type(cfg.GetDisplayLuck)=="function" then
-                    local ok,record=pcall(cfg.Get,model.Name)
-                    if ok and type(record)=="table" then local valid,value=pcall(cfg.GetDisplayLuck,record);if valid then luck=tonumber(value) or 1 end end
-                end
-                local better=not bestModel or (fresh and not bestFresh) or (fresh==bestFresh and (height>bestHeight+0.1 or (math.abs(height-bestHeight)<=0.1 and distance<bestDistance)))
-                if gameLogic.flags.bestLuck then better=not bestModel or luck>bestLuck or (luck==bestLuck and distance<bestDistance) end
-                local minLuck=tonumber(gameLogic.filters.minLuck) or 0
-                if luck>=minLuck and better then
+                if not bestModel or (fresh and not bestFresh) or (fresh==bestFresh and (height>bestHeight+0.1 or (math.abs(height-bestHeight)<=0.1 and distance<bestDistance))) then
                     bestModel,bestPrompt,bestDistance=model,prompt,distance
-                    bestFresh,bestHeight,bestLuck=fresh,height,luck
+                    bestFresh,bestHeight=fresh,height
                 end
             end
         end
@@ -304,25 +208,26 @@ local function earnedSpeed()
         local amount,unit=cleaned:match("^([%d%.]+)(%a+)$")
         number=tonumber(cleaned) or (tonumber(amount) and speedUnits[unit] and tonumber(amount)*speedUnits[unit])
     end
-    if not number or number~=number or number<0 then return nil end
+    if not number or number~=number or number<0 or number==math.huge then return nil end
     for i=1,#speedCurve-1 do
         local a,b=speedCurve[i],speedCurve[i+1]
         if number<=b[1] then return a[2]+(b[2]-a[2])*math.clamp((number-a[1])/(b[1]-a[1]),0,1) end
     end
     return 340
 end
-local function tweenTo(destination, speed, onStep)
+local function tweenTo(destination, onStep)
     local hrp = root()
     if not running or not hrp then return false, "interrupted" end
     local origin = hrp.CFrame
     local distance = (origin.Position - destination.Position).Magnitude
     if distance <= 0.25 then return true end
     local goal = CFrame.new(destination.Position) * origin.Rotation
-    local rate = math.clamp(speed or CONFIG.TweenSpeed, CONFIG.MinTweenSpeed, CONFIG.MaxTweenSpeed)
-    if adaptiveSpeed then
-        local earned=earnedSpeed()
-        if earned then rate=math.min(rate,math.max(16,earned)) end
+    local earned = earnedSpeed()
+    if not earned then
+        report("speed", "Leaderboard Speed unavailable; waiting for player data.")
+        return false, "speed_unavailable"
     end
+    local rate = math.clamp(earned, CONFIG.MinTweenSpeed, CONFIG.MaxTweenSpeed)
     local duration = math.max(CONFIG.MinTweenDuration, distance / rate)
     local proxy = Instance.new("CFrameValue")
     proxy.Value = origin
@@ -421,7 +326,7 @@ local function approach(prompt)
     local distance = math.min(CONFIG.PickupDistance, math.max(0.5, prompt.MaxActivationDistance * 0.5))
     local target = pos + horizontal.Unit * distance
     if offset.Magnitude <= math.min(prompt.MaxActivationDistance * 0.8, distance + 2) then return true end
-    return tweenTo(CFrame.new(target), CONFIG.TweenSpeed, function()
+    return tweenTo(CFrame.new(target), function()
         if carrying() ~= false then return false, "state_changed" end
         local currentPos = promptPosition(prompt)
         if not currentPos or not prompt.Enabled then return false, "target_changed" end
@@ -507,7 +412,7 @@ local function returnToSafeZone()
         return true
     end
     if (hrp.Position - target.Position).Magnitude > CONFIG.MoveTolerance then
-        local reached, reason = tweenTo(target, CONFIG.TweenSpeed, observeCarry)
+        local reached, reason = tweenTo(target, observeCarry)
         if not running or root() ~= hrp then return end
         if not reached and reason ~= "carry_cleared" then
             publish("Return incomplete")
@@ -642,10 +547,6 @@ local function visibleBoostObject(object, gui)
 end
 local function clickBoost(button, gui)
     if not visibleBoostObject(button, gui) or not isTraining() then return false, "TAP unavailable" end
-    if type(firesignal)=="function" then
-        local ok=pcall(firesignal,button.Activated)
-        if ok then return true,1 end
-    end
     if type(getconnections) ~= "function" then return false, "Boost connection API unavailable" end
     local ok, connections = pcall(getconnections, button.Activated)
     if not ok or type(connections) ~= "table" then return false, "Cannot read TAP handlers" end
@@ -742,11 +643,7 @@ local treadmillTargetPart
 local nextTreadmillSearch = 0
 local function ownedTreadmillPart(part)
     if not part or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then return false end
-    if part.Name ~= "Seat" and part.Name ~= "Primary" and part.Name ~= "TreadmilBox" then return false end
-    local plot=gameLogic.ownPlot()
-    local treadmill=plot and plot:FindFirstChild("Treadmil",true)
-    local model=treadmill and treadmill:FindFirstChild("PlayerTreadmill")
-    if model and part:IsDescendantOf(model) then return true end
+    if part.Name ~= "Seat" and part.Name ~= "TreadmilBox" then return false end
     local node = part
     local inTreadmill = part.Name == "TreadmilBox"
     local owner
@@ -759,11 +656,6 @@ local function ownedTreadmillPart(part)
     return inTreadmill and owner == player.UserId
 end
 local function resolveTreadmill()
-    local plot=gameLogic.ownPlot()
-    local treadmill=plot and (plot:FindFirstChild("Treadmil") or plot:FindFirstChild("Treadmil",true))
-    local model=treadmill and treadmill:FindFirstChild("PlayerTreadmill")
-    local direct=model and (model:FindFirstChild("Seat") or model:FindFirstChild("Primary") or model:FindFirstChild("TreadmilBox"))
-    if direct and direct:IsA("BasePart") then treadmillPart=direct;return direct end
     if ownedTreadmillPart(treadmillPart) then return treadmillPart end
     treadmillPart = nil
     local now = os.clock()
@@ -771,8 +663,8 @@ local function resolveTreadmill()
     nextTreadmillSearch = now + CONFIG.TreadmillSearchInterval
     local seats, boxes = {}, {}
     for _, object in ipairs(workspace:GetDescendants()) do
-        if (object.Name == "Seat" or object.Name == "Primary" or object.Name == "TreadmilBox") and ownedTreadmillPart(object) then
-            local list = (object.Name == "Seat" or object.Name=="Primary") and seats or boxes
+        if (object.Name == "Seat" or object.Name == "TreadmilBox") and ownedTreadmillPart(object) then
+            local list = object.Name == "Seat" and seats or boxes
             table.insert(list, object)
         end
     end
@@ -786,46 +678,10 @@ local function resolveTreadmill()
     return treadmillPart
 end
 local function treadmillDestination(part)
-    local offset = (part.Name == "Seat" or part.Name=="Primary") and CONFIG.TreadmillSeatOffset or 0
+    local offset = part.Name == "Seat" and CONFIG.TreadmillSeatOffset or 0
     return CFrame.new(part.Position + Vector3.new(0, offset, 0))
 end
-function gameLogic.adminStep()
-    if not gameLogic.flags.admin then return false end
-    local folder=workspace:FindFirstChild("AdminTreadmillEvent")
-    local model=folder and folder:FindFirstChildWhichIsA("Model")
-    if not model then gameLogic.note("admin","Waiting for event");return false end
-    local hrp=root()
-    if not hrp or carrying()~=false then return true end
-    local cf,size=model:GetBoundingBox()
-    local offset=cf:PointToObjectSpace(hrp.Position)
-    local gap=Vector2.new(math.max(math.abs(offset.X)-size.X/2,0),math.max(math.abs(offset.Z)-size.Z/2,0)).Magnitude
-    if isTraining() and gap<=6 then gameLogic.note("admin","Training on shared treadmill");return true end
-    if os.clock()<(gameLogic.next.admin or 0) then return true end
-    gameLogic.next.admin=os.clock()+3
-    if isTraining() then
-        local folder=RS:FindFirstChild("Remotes")
-        local group=folder and folder:FindFirstChild("Treadmill")
-        local event=group and group:FindFirstChild("ExitRequest")
-        if event and event:IsA("RemoteEvent") then pcall(event.FireServer,event) end
-        return true
-    end
-    local spot=cf:PointToWorldSpace(Vector3.new(math.clamp(offset.X,-size.X/2,size.X/2),0,math.clamp(offset.Z,-size.Z/2,size.Z/2)))
-    if gap>2 then
-        local reached=tweenTo(CFrame.new(spot.X,hrp.Position.Y,spot.Z),CONFIG.TweenSpeed,function() return gameLogic.flags.admin and model.Parent~=nil and root()==hrp and carrying()==false end)
-        if not reached then gameLogic.note("admin","Moving interrupted");return true end
-    end
-    if disposed or not gameLogic.flags.admin or root()~=hrp or not model.Parent then return true end
-    local remotes=RS:FindFirstChild("Remotes")
-    local group=remotes and remotes:FindFirstChild("Treadmill")
-    local join=group and group:FindFirstChild("JoinShared")
-    if not join or not join:IsA("RemoteEvent") then gameLogic.note("admin","Join remote unavailable");gameLogic.next.admin=os.clock()+15;return true end
-    local ok=pcall(join.FireServer,join)
-    gameLogic.note("admin",ok and "Join requested" or "Join failed")
-    return true
-end
 local function treadmillCycle()
-    if gameLogic.adminStep() then return end
-    if not treadmillRequested then return end
     local hrp = root()
     if not hrp then publishTreadmill("Waiting for character"); return end
     if hrp ~= treadmillRoot then
@@ -871,7 +727,7 @@ local function treadmillCycle()
     if not treadmillArrived then
         if distance > CONFIG.TreadmillArrivalRadius then
             publishTreadmill("Moving to your treadmill")
-            local reached = tweenTo(target, CONFIG.TweenSpeed, function()
+            local reached = tweenTo(target, function()
                 if not treadmillRequested or carrying() ~= false then return false, "state_changed" end
                 if isTraining() then return false, "training_started" end
                 if not ownedTreadmillPart(part) or (treadmillDestination(part).Position - target.Position).Magnitude > 2 then
@@ -888,18 +744,8 @@ local function treadmillCycle()
         log("Owned treadmill destination reached; waiting for native training.")
     end
     publishTreadmill("Waiting for training")
-    if os.clock()-treadmillArrivedAt>=3 then
-        treadmillArrived=false
-        local character=player.Character
-        local humanoid=character and character:FindFirstChildOfClass("Humanoid")
-        if humanoid and not isTraining() and treadmillRequested then
-            local away=Vector3.new(hrp.Position.X-part.Position.X,0,hrp.Position.Z-part.Position.Z)
-            if away.Magnitude<1 then away=Vector3.new(0,0,1) end
-            humanoid:MoveTo(part.Position+away.Unit*10)
-            task.wait(.6)
-            if treadmillRequested and root()==hrp and not isTraining() and ownedTreadmillPart(part) then humanoid:MoveTo(part.Position) end
-            task.wait(.6)
-        end
+    if os.clock() - treadmillArrivedAt >= CONFIG.TreadmillSettleTime and distance > CONFIG.TreadmillArrivalRadius then
+        treadmillArrived = false
     end
 end
 local function remote(group,name)
@@ -912,27 +758,6 @@ local function invoke(group,name,...)
     if not item or not item:IsA("RemoteFunction") then return false,"Remote unavailable: "..group.."."..name end
     return pcall(item.InvokeServer,item,...)
 end
-function gameLogic.bindBoost()
-    local event=remote("Treadmill","Boost")
-    if event==gameLogic.boostRemote then return end
-    if gameLogic.boostConnection then gameLogic.boostConnection:Disconnect();gameLogic.boostConnection=nil end
-    gameLogic.boostRemote=event
-    if not event or not event:IsA("RemoteEvent") then return end
-    gameLogic.boostConnection=event.OnClientEvent:Connect(function(id)
-        if disposed or not boostEnabled or not isTraining() or type(id)~="string" or id=="" then return end
-        local stamp=os.clock()
-        if gameLogic.lastBoostId==id and stamp-(gameLogic.lastBoostAt or 0)<3 then return end
-        gameLogic.lastBoostId,gameLogic.lastBoostAt=id,stamp
-        task.delay(.2,function()
-            if disposed or not boostEnabled or not isTraining() or event~=gameLogic.boostRemote then return end
-            if pendingBoost then return end
-            local before={combo=tonumber(player:GetAttribute("TreadmillCombo")) or 0,multiplier=tonumber(player:GetAttribute("TreadmillBoostMultiplier")) or 0,boosted=player:GetAttribute("TreadmillBoosted"),deadline=os.clock()+1.4}
-            local ok=pcall(event.FireServer,event,id)
-            if ok then pendingBoost=before;lastBoostStatus="Event boost requested" end
-        end)
-    end)
-    table.insert(gameLogic.connections,gameLogic.boostConnection)
-end
 local lastExit=0
 local function leaveTraining()
     if not isTraining() then return true end
@@ -944,8 +769,11 @@ local function leaveTraining()
     return false
 end
 local function ownedPlot()
-    local plot=gameLogic.ownPlot()
-    return plot and (plot.Name=="PlotModel" and plot or plot:FindFirstChild("PlotModel"))
+    local plots=workspace:FindFirstChild("Plots")
+    if not plots then return nil end
+    for _,model in ipairs(plots:GetDescendants()) do
+        if model.Name=="PlotModel" and tonumber(model:GetAttribute("PlotOwnerUserId"))==player.UserId then return model end
+    end
 end
 local function ownedPack()
     local function find(container)
@@ -964,37 +792,14 @@ local function placeCycle()
     if not pack then setStatus(placeStatusLabel,"No owned packs");return false end
     if os.clock()<nextPlace then return true end
     local plot=ownedPlot()
-    local ground=plot and (plot:FindFirstChild("AnimeArea") or plot:FindFirstChild("Ground1"))
+    local ground=plot and plot:FindFirstChild("Ground1")
     if not ground or not ground:IsA("BasePart") then setStatus(placeStatusLabel,"Own plot not loaded");nextPlace=os.clock()+2;return true end
     local hrp=root()
     if not hrp then return true end
     local size=ground.Size
-    local records=gameLogic.records()
-    if not records then setStatus(placeStatusLabel,"Waiting for inventory");nextPlace=os.clock()+2;return true end
-    local recordSize=1.5
-    for _,record in ipairs(records) do if tostring(record.Id)==tostring(pack:GetAttribute("PackId")) then recordSize=tonumber(record.Size) or 1.5;break end end
-    local radius=2.4*math.max(.5,recordSize)
-    local occupied={}
-    for _,record in ipairs(records) do
-        if gameLogic.placed(record) then table.insert(occupied,{tonumber(record.RelativeX),tonumber(record.RelativeZ),2.4*(tonumber(record.Size) or 1.5)}) end
-    end
-    for i=#gameLogic.pending,1,-1 do local item=gameLogic.pending[i];if item[4]<=os.clock() then table.remove(gameLogic.pending,i) else table.insert(occupied,item) end end
-    for i=#gameLogic.refused,1,-1 do if gameLogic.refused[i][3]<=os.clock() then table.remove(gameLogic.refused,i) end end
-    local bestX,bestZ,bestGap
-    local limitX,limitZ=size.X/2-radius,size.Z/2-radius
-    local step=math.max(2,math.max(size.X,size.Z)/60)
-    for x=-limitX,limitX,step do
-        for z=-limitZ,limitZ,step do
-            local gap=math.huge
-            for _,item in ipairs(occupied) do gap=math.min(gap,math.sqrt((x-item[1])^2+(z-item[2])^2)-radius-item[3]) end
-            for _,item in ipairs(gameLogic.refused) do if (x-item[1])^2+(z-item[2])^2<16 then gap=-1;break end end
-            if gap>=1 and (bestGap==nil or gap<bestGap) then bestX,bestZ,bestGap=x,z,gap end
-        end
-    end
-    if not bestX then setStatus(placeStatusLabel,"Plot full");nextPlace=os.clock()+10;return true end
-    local position=ground.CFrame:PointToWorldSpace(Vector3.new(bestX,size.Y/2,bestZ))
+    local position=ground.CFrame:PointToWorldSpace(Vector3.new((math.random()-.5)*size.X,size.Y/2,(math.random()-.5)*size.Z))
     setStatus(placeStatusLabel,"Moving to plot")
-    local reached=tweenTo(CFrame.new(position+Vector3.new(0,3,0)),CONFIG.TweenSpeed,function()
+    local reached=tweenTo(CFrame.new(position+Vector3.new(0,3,0)), function()
         return placeRequested and not disposed and root()==hrp and ownedPlot()==plot and ground.Parent~=nil and pack.Parent~=nil and carrying()==false
     end)
     nextPlace=os.clock()+1
@@ -1008,175 +813,32 @@ local function placeCycle()
     if id==nil then return true end
     setStatus(placeStatusLabel,"Placing pack")
     local ok,result=invoke("Packs","PlaceOwned",{Position=position,PackId=id})
-    if not ok or not (result==true or type(result)=="table" and result.Success==true) then
-        if type(result)=="table" and result.Reason=="OVERLAPS_PACK" then table.insert(gameLogic.refused,{bestX,bestZ,os.clock()+120}) end
+    if not ok or result==false then
         setStatus(placeStatusLabel,"Placement rejected")
         report("place",result)
         nextPlace=os.clock()+3
     else
-        table.insert(gameLogic.pending,{bestX,bestZ,radius,os.clock()+6})
-        setStatus(placeStatusLabel,"Placement confirmed")
+        setStatus(placeStatusLabel,"Placement requested")
         nextPlace=os.clock()+2
     end
     return true
 end
-function gameLogic.request(group,name,...)
-    local ok,result=invoke(group,name,...)
-    if not ok then return false,tostring(result) end
-    if result==true then return true,result end
-    if type(result)=="table" then return result.Success==true,result.Reason or result.Message or result end
-    return false,tostring(result)
-end
-function gameLogic.note(key,message)
-    setStatus(gameLogic.status[key],tostring(message))
-end
-function gameLogic.openStep(atHome)
-    if gameLogic.openNeedsHome and not atHome then return end
-    local records=gameLogic.records()
-    if not records then gameLogic.note("open","Waiting for inventory");return end
-    for _,record in ipairs(records) do
-        if gameLogic.placed(record) and gameLogic.isCharacter(record)==false and (tonumber(record.GrowthEndsAt) or math.huge)<=workspace:GetServerTimeNow()-.3 then
-            local success,reason=gameLogic.request("Packs","OpenOwned",record.Id)
-            if success then gameLogic.note("open","Opened pack");gameLogic.next.equip=0
-            else
-                if reason=="NOT_IN_PLOT" or reason=="TOO_FAR" then gameLogic.openNeedsHome=true;gameLogic.next.openHome=os.clock()+2 end
-                gameLogic.note("open",type(reason)=="table" and "Request rejected" or reason)
-            end
-            return
+local function upgradeAura()
+    local shared=RS:FindFirstChild("Shared")
+    local configs=shared and shared:FindFirstChild("Configs")
+    local module=configs and configs:FindFirstChild("AurasConfig")
+    if not module then return false end
+    local ok,config=pcall(require,module)
+    if not ok or type(config)~="table" or type(config.Ordered)~="table" then return false end
+    for i,item in ipairs(config.Ordered) do
+        if item.Id=="ElectricityAura" then
+            local nextAura=config.Ordered[i+1]
+            if nextAura and nextAura.Id and not nextAura.DungeonOnly then return invoke("Auras","Purchase",nextAura.Id) end
+            break
         end
     end
-    gameLogic.openNeedsHome=false
-    gameLogic.note("open","No grown packs")
+    return false
 end
-function gameLogic.openHomeCycle()
-    if not gameLogic.flags.open or not gameLogic.openNeedsHome or os.clock()<(gameLogic.next.openHome or 0) or carrying()~=false then return false end
-    local plot=ownedPlot()
-    local area=plot and (plot:FindFirstChild("AnimeArea") or plot:FindFirstChild("Ground1"))
-    local hrp=root()
-    gameLogic.next.openHome=os.clock()+5
-    if not hrp or not area or not area:IsA("BasePart") then gameLogic.note("open","Waiting for own plot");return true end
-    local pos=area.CFrame:PointToWorldSpace(Vector3.new(0,area.Size.Y/2+3,0))
-    local offset=area.CFrame:PointToObjectSpace(hrp.Position)
-    if math.abs(offset.X)>area.Size.X/2 or math.abs(offset.Z)>area.Size.Z/2 then
-        local reached=tweenTo(CFrame.new(pos),CONFIG.TweenSpeed,function() return gameLogic.flags.open and root()==hrp and carrying()==false and ownedPlot()==plot end)
-        if not reached then return true end
-    end
-    if gameLogic.flags.open and not disposed then gameLogic.openStep(true) end
-    return true
-end
-function gameLogic.price(module,method,...)
-    local cfg=gameLogic.module(module)
-    if not cfg or type(cfg[method])~="function" then return nil end
-    local ok,value=pcall(cfg[method],...)
-    if ok then return tonumber(value) end
-end
-function gameLogic.upgradeStep(key)
-    local cash=gameLogic.num("Cash")
-    if cash==nil then return "Waiting for cash data" end
-    local price,group,action,arg
-    if key=="tread" then
-        local level=gameLogic.data("TreadmillLevel")
-        if level==nil then return "Waiting for treadmill data" end
-        price=gameLogic.price("TreadmillConfig","GetPriceForNextLevel",tonumber(tostring(level):match("%d+"))) or gameLogic.price("TreadmillConfig","GetPriceForNextLevel",level)
-        group,action,arg="Treadmill","Upgrade",{}
-    elseif key=="base" then
-        local level=gameLogic.num("BaseUpgradeLevel");if level==nil then return "Waiting for base data" end
-        price=gameLogic.price("BaseUpgradeConfig","GetPriceForNextLevel",level)
-        group,action,arg="BaseUpgrade","Purchase",{}
-    elseif key=="luck" then
-        local level=gameLogic.num("HatchLuckLevel");if level==nil then return "Waiting for luck data" end
-        price=gameLogic.price("LuckMachineConfig","GetPrice",level)
-        group,action,arg="LuckMachine","Upgrade","Max"
-    end
-    if not price or price<0 then return "Price unavailable or max level" end
-    if cash<price then return "Waiting for cash" end
-    local ok,reason=gameLogic.request(group,action,arg)
-    return ok and "Upgrade confirmed" or (type(reason)=="string" and reason or "Upgrade rejected")
-end
-function gameLogic.auraStep()
-    local cfg=gameLogic.module("AurasConfig")
-    local data=gameLogic.data("Auras")
-    local cash=gameLogic.num("Cash")
-    if not cfg or type(cfg.Ordered)~="table" or type(data)~="table" or type(data.Owned)~="table" or cash==nil then return "Waiting for aura data" end
-    local best,buy,bestMult,buyMult=nil,nil,0,0
-    for _,aura in pairs(cfg.Ordered) do
-        if type(aura)=="table" and type(aura.Id)=="string" then
-            local mult=tonumber(aura.SpeedMultiplier) or 0
-            local price=tonumber(aura.CashPrice or aura.Price or aura.Cost)
-            if data.Owned[aura.Id]==true then
-                if mult>bestMult then best,bestMult=aura.Id,mult end
-            elseif not aura.DungeonOnly and price and price>=0 and price<=cash and mult>buyMult then buy,buyMult=aura.Id,mult end
-        end
-    end
-    if gameLogic.flags.buyAura and buy and buyMult>bestMult then local ok=gameLogic.request("Auras","Purchase",buy);return ok and "Purchased "..buy or "Purchase rejected" end
-    if gameLogic.flags.equipAura and best and data.Equipped~=best then local ok=gameLogic.request("Auras","Equip",best);return ok and "Equipped "..best or "Equip rejected" end
-    return "No better aura available"
-end
-function gameLogic.coachStep()
-    local cfg=gameLogic.module("CoachConfig")
-    local util=gameLogic.module("CoachUtil","Utilities")
-    local data=gameLogic.data("Coaches")
-    local cash=gameLogic.num("Cash")
-    if not cfg or type(cfg.Coaches)~="table" or not util or type(data)~="table" or type(data.Owned)~="table" or cash==nil then return "Waiting for coach data" end
-    local best,buy,bestBoost,buyBoost=nil,nil,-1,-1
-    local windowOk,window=pcall(util.GetWindow,workspace:GetServerTimeNow())
-    for _,coach in pairs(cfg.Coaches) do
-        if type(coach)=="table" and type(coach.Id)=="string" then
-            local owned=data.Owned[coach.Id]
-            local boost=tonumber(coach.Boost) or 0
-            if owned==true or (tonumber(owned) or 0)>0 then if boost>bestBoost then best,bestBoost=coach.Id,boost end end
-            if not coach.Limited and not coach.Featured and windowOk and type(util.GetRemaining)=="function" then
-                local price=tonumber(coach.Price)
-                local ok,left=pcall(util.GetRemaining,data,coach,window)
-                if ok and (tonumber(left) or 0)>0 and price and price>=0 and price<=cash and boost>buyBoost then buy,buyBoost=coach.Id,boost end
-            end
-        end
-    end
-    if gameLogic.flags.buyCoach and buy and buyBoost>bestBoost then local ok=gameLogic.request("Coaches","Purchase",buy);return ok and "Purchased "..buy or "Purchase rejected" end
-    if gameLogic.flags.equipCoach and best and data.Equipped~=best then local ok=gameLogic.request("Coaches","Equip",best);return ok and "Equipped "..best or "Equip rejected" end
-    return "No better coach available"
-end
-function gameLogic.rebirthStep()
-    local cfg=gameLogic.module("RebirthConfig")
-    local count=gameLogic.num("Rebirths")
-    local speed=gameLogic.num("Speed")
-    if not cfg or type(cfg.Requirement)~="table" or count==nil or speed==nil then return "Waiting for rebirth data" end
-    local required=(tonumber(cfg.Requirement.Base) or 2000000)*(tonumber(cfg.Requirement.Growth) or 6)^count
-    if speed<required then return "Waiting for speed" end
-    if running or carrying()~=false then return "Waiting for idle movement" end
-    if not leaveTraining() then return "Leaving treadmill" end
-    local ok=gameLogic.request("Rebirth","Request")
-    return ok and "Rebirth confirmed" or "Rebirth rejected"
-end
-function gameLogic.restoreGraphics()
-    gameLogic.flags.graphics=false
-    gameLogic.graphicsGeneration=(gameLogic.graphicsGeneration or 0)+1
-    for instance,properties in pairs(gameLogic.saved) do for property,value in pairs(properties) do pcall(function() instance[property]=value end) end end
-    table.clear(gameLogic.saved)
-    if gameLogic.graphicsConnection then gameLogic.graphicsConnection:Disconnect();gameLogic.graphicsConnection=nil end
-end
-function gameLogic.graphics(enabled)
-    gameLogic.restoreGraphics()
-    if not enabled then return end
-    gameLogic.flags.graphics=true
-    local generation=gameLogic.graphicsGeneration
-    local function change(instance,property,value)
-        local ok,old=pcall(function() return instance[property] end)
-        if not ok then return end
-        local saved=gameLogic.saved[instance] or {};gameLogic.saved[instance]=saved
-        if saved[property]==nil then saved[property]=old end
-        pcall(function() instance[property]=value end)
-    end
-    local function thin(instance)
-        if disposed or not gameLogic.flags.graphics or generation~=gameLogic.graphicsGeneration then return end
-        if instance:IsA("ParticleEmitter") or instance:IsA("Trail") or instance:IsA("Beam") or instance:IsA("Smoke") or instance:IsA("Fire") or instance:IsA("Sparkles") then change(instance,"Enabled",false)
-        elseif instance:IsA("BasePart") then change(instance,"CastShadow",false) end
-    end
-    gameLogic.graphicsConnection=workspace.DescendantAdded:Connect(thin)
-    change(game:GetService("Lighting"),"GlobalShadows",false)
-    task.spawn(function() for i,instance in ipairs(workspace:GetDescendants()) do if disposed or not gameLogic.flags.graphics or generation~=gameLogic.graphicsGeneration then break end;thin(instance);if i%500==0 then task.wait() end end end)
-end
-
 local AgonyUI = (function()
 local Library = {}
 function Library.Create(options)
@@ -1596,7 +1258,7 @@ for i, name in ipairs(names) do
 assert(type(name) == "string" and not tabs[name], "Tab names must be unique strings")
 local b = button(tabScroll, "", UDim2.new(1, -2, 0, 42))
 b.LayoutOrder = i
-local symbols={Home="⌂",Settings="⚙",Main="▦",Farm="◆",Egg="◇",Boss="✦",Trade="⇄",Event="★",Island="⌖"}
+local symbols={Home="⌂",Settings="⚙",Main="▦",Farm="◆",Packs="◇",Progress="↑",Egg="◇",Boss="✦",Trade="⇄",Event="★",Island="⌖"}
 local index = label(b, symbols[name] or string.format("%02d", i), UDim2.fromOffset(34,42), UDim2.fromOffset(7,0), 25)
 index.TextXAlignment=Enum.TextXAlignment.Center
 index.TextColor3 = C.muted
@@ -2419,8 +2081,8 @@ local Hub = AgonyUI.Create({
     HideUsername = true,
     DiscordURL = "https://discord.gg/PNrfkj73eT",
     TikTokURL = "https://www.tiktok.com/@mrpopscle12?is_from_webapp=1&sender_device=pc",
-    Tabs = {"Home", "Farm", "Upgrades", "Settings"},
-    Descriptions = {Farm = "Auto Steal / Treadmill", Upgrades="Game progression", Settings = "Preferences"},
+    Tabs = {"Home", "Farm", "Packs", "Progress", "Settings"},
+    Descriptions = {Farm = "Auto Steal / Treadmill", Packs = "Open mature packs", Progress = "Upgrades / Gear / Rebirth", Settings = "Preferences"},
     OpenOnLoad = true,
     LoadingTime = 10,
     Logo = "",
@@ -2461,15 +2123,6 @@ CONFIG.Stage=stageNumbers[1]
 Hub:Dropdown("Farm", "Select Stage", stages, stages[1], function(value)
     controller.SetStage(tonumber(value:match("%d+")) or 1)
 end)
-local speedBox
-speedBox = Hub:Textbox("Farm", "Tween Speed (studs/s)", "20 - 150", CONFIG.TweenSpeed, function(text)
-    local speed, valid = controller.SetTweenSpeed(text)
-    speedBox.Text = tostring(speed)
-    if not valid then report("speed", "Enter a valid number from 20 to 150.") end
-end)
-Hub:Toggle("Farm","Adaptive Tween Speed",false,function(enabled) adaptiveSpeed=enabled end)
-Hub:Toggle("Farm","Prioritize Pack Luck",false,function(enabled) gameLogic.flags.bestLuck=enabled end)
-Hub:Textbox("Farm","Minimum Pack Luck","0 = any","0",function(value) gameLogic.filters.minLuck=math.max(0,tonumber(value) or 0) end)
 statusLabel = Hub:Label("Farm", "Status", "Idle")
 Hub:Section("Farm","Packs",false)
 setPlaceToggle=Hub:Toggle("Farm","Auto Place",false,function(enabled)
@@ -2484,25 +2137,11 @@ setPlaceToggle=Hub:Toggle("Farm","Auto Place",false,function(enabled)
     setStatus(placeStatusLabel,enabled and "Starting" or "Idle")
 end)
 placeStatusLabel=Hub:Label("Farm","Place Status","Idle")
-Hub:Toggle("Farm","Auto Open",false,function(enabled) gameLogic.flags.open=enabled;gameLogic.openNeedsHome=false;gameLogic.next.open=0;gameLogic.note("open",enabled and "Starting" or "Idle") end)
-gameLogic.status.open=Hub:Label("Farm","Open Status","Idle")
 Hub:Toggle("Farm","Equip Best",false,function(enabled) equipRequested=enabled;setStatus(equipStatusLabel,enabled and "Starting" or "Idle") end)
 equipStatusLabel=Hub:Label("Farm","Equip Status","Idle")
-Hub:Section("Upgrades","Progression",false)
-Hub:Toggle("Upgrades","Upgrade All",false,function(enabled) upgradeRequested=enabled;setStatus(upgradeStatusLabel,enabled and "Starting" or "Idle") end)
-upgradeStatusLabel=Hub:Label("Upgrades","Upgrade Status","Idle")
-for _,entry in ipairs({{"tread","Auto Upgrade Treadmill"},{"base","Auto Upgrade Base"},{"luck","Auto Upgrade Luck"},{"rebirth","Auto Rebirth"},{"gear","Auto Equip Gears"}}) do
-    local key,name=entry[1],entry[2]
-    Hub:Toggle("Upgrades",name,false,function(enabled) gameLogic.flags[key]=enabled;gameLogic.next[key]=0;gameLogic.note(key,enabled and "Starting" or "Idle") end)
-    gameLogic.status[key]=Hub:Label("Upgrades",name.." Status","Idle")
-end
-Hub:Section("Upgrades","Auras & Coaches",false)
-for _,entry in ipairs({{"buyAura","Auto Buy Aura"},{"equipAura","Auto Equip Aura"},{"buyCoach","Auto Buy Coach"},{"equipCoach","Auto Equip Coach"}}) do
-    local key,name=entry[1],entry[2]
-    Hub:Toggle("Upgrades",name,false,function(enabled) gameLogic.flags[key]=enabled end)
-end
-gameLogic.status.aura=Hub:Label("Upgrades","Aura Status","Idle")
-gameLogic.status.coach=Hub:Label("Upgrades","Coach Status","Idle")
+Hub:Section("Farm","Upgrades",false)
+Hub:Toggle("Farm","Upgrade All",false,function(enabled) upgradeRequested=enabled;setStatus(upgradeStatusLabel,enabled and "Starting" or "Idle") end)
+upgradeStatusLabel=Hub:Label("Farm","Upgrade Status","Idle")
 Hub:Section("Farm", "Treadmill", false)
 setTreadmillToggle = Hub:Toggle("Farm", "Auto Treadmill", false, function(enabled)
     if disposed then return end
@@ -2524,19 +2163,157 @@ setTreadmillToggle = Hub:Toggle("Farm", "Auto Treadmill", false, function(enable
         publishTreadmill("Idle")
     end
 end)
-Hub:Toggle("Farm","Auto Admin Treadmill",false,function(enabled)
-    gameLogic.flags.admin=enabled;gameLogic.next.admin=0
-    gameLogic.note("admin",enabled and "Starting" or "Idle")
-end)
-gameLogic.status.admin=Hub:Label("Farm","Admin Treadmill Status","Idle")
 Hub:Toggle("Farm", "Auto Boost", false, function(enabled)
     boostEnabled = enabled
     resetBoost()
 end)
 treadmillStatusLabel = Hub:Label("Farm", "Treadmill Status", "Idle")
 Hub:Section("Settings", "Preferences", false)
-Hub:Toggle("Settings","FPS Optimizer",false,function(enabled) gameLogic.graphics(enabled) end)
-Hub:Label("Settings","Additional logic source","Tora IsMe / BigFroot reference")
+Hub:Label("Settings","Additional logic source","Tora IsMe / BigFroot")
+local function addRecoveredFeatures(Hub)
+    local enabled,labels,cache={},{},{}
+    local effects=setmetatable({},{__mode="k"})
+    local function moduleAt(parent,name)
+        if not parent then return nil end
+        local item=parent:FindFirstChild(name)
+        if not item or not item:IsA("ModuleScript") then return nil end
+        if cache[item] then return cache[item] end
+        local ok,value=pcall(require,item)
+        if ok and type(value)=="table" then cache[item]=value;return value end
+    end
+    local function config(name)
+        local shared=RS:FindFirstChild("Shared")
+        return moduleAt(shared and shared:FindFirstChild("Configs"),name)
+    end
+    local function data(key)
+        local shared=RS:FindFirstChild("Shared")
+        local modules=shared and shared:FindFirstChild("Modules")
+        local receiver=modules and modules:FindFirstChild("DataReceiver")
+        local pd=moduleAt(receiver,"PlayerData")
+        if not pd or type(pd.Get)~="function" then return nil end
+        local ok,value=pcall(pd.Get,key)
+        if ok then return value end
+    end
+    local function num(key) return tonumber(data(key)) end
+    local function status(key,value) setStatus(labels[key],value) end
+    local function success(ok,result) return ok and type(result)=="table" and result.Success==true end
+    local function add(tab,key,name)
+        Hub:Toggle(tab,name,false,function(value) enabled[key]=value;status(key,value and "Waiting" or "Idle") end)
+        labels[key]=Hub:Label(tab,name.." Status","Idle")
+    end
+    local function request(key,group,name,...)
+        if not enabled[key] or disposed then return end
+        local ok,result=invoke(group,name,...)
+        status(key,success(ok,result) and "Success" or (not ok and "Unavailable / refused" or "Not confirmed"))
+        return ok,result
+    end
+    local function autoOpen()
+        local inventory=data("Inventory")
+        local cfg=config("PacksConfig")
+        if type(inventory)~="table" or type(inventory.Packs)~="table" or not cfg or type(cfg.IsCharacter)~="function" then status("open","Inventory not ready");return end
+        local plot=ownedPlot()
+        local area=plot and (plot:FindFirstChild("AnimeArea") or plot:FindFirstChild("Ground1"))
+        local hrp=root()
+        if not area or not area:IsA("BasePart") or not hrp then status("open","Own plot not ready");return end
+        local point=area.CFrame:PointToObjectSpace(hrp.Position)
+        if math.abs(point.X)>area.Size.X/2+2 or math.abs(point.Z)>area.Size.Z/2+2 then status("open","Return to own plot");return end
+        local now=workspace:GetServerTimeNow()
+        for _,record in pairs(inventory.Packs) do
+            if type(record)=="table" and type(record.Id)=="string" and tonumber(record.RelativeX) and tonumber(record.RelativeZ) and (tonumber(record.GrowthEndsAt) or math.huge)<=now-.3 then
+                local ok,isCharacter=pcall(cfg.IsCharacter,record)
+                if ok and isCharacter==false then request("open","Packs","OpenOwned",record.Id);return end
+            end
+        end
+        status("open","No mature placed packs")
+    end
+    local function paidUpgrade(key,moduleName,method,levelKey,group,name,arg)
+        local cfg=config(moduleName)
+        local level=data(levelKey)
+        local cash=num("Cash")
+        if not cfg or type(cfg[method])~="function" or level==nil or cash==nil then status(key,"Data not ready");return end
+        local ok,price=pcall(cfg[method],level)
+        price=ok and tonumber(price) or nil
+        if not price then status(key,"No next upgrade");return end
+        if cash<price then status(key,"Waiting for cash");return end
+        request(key,group,name,arg)
+    end
+    local function rebirth()
+        local cfg=config("RebirthConfig")
+        local req=cfg and cfg.Requirement
+        local count,speed=num("Rebirths"),num("Speed")
+        if type(req)~="table" or not tonumber(req.Base) or not tonumber(req.Growth) or count==nil or speed==nil then status("rebirth","Data not ready");return end
+        if speed<tonumber(req.Base)*tonumber(req.Growth)^count then status("rebirth","Waiting for speed");return end
+        if carrying()~=false or isTraining() or running then status("rebirth","Waiting for idle");return end
+        request("rebirth","Rebirth","Request")
+    end
+    local function restoreEffects()
+        for object,old in pairs(effects) do if object.Parent then pcall(function() object.Enabled=old end) end end
+        table.clear(effects)
+    end
+    local oldStop=controller.Stop
+    function controller.Stop()
+        oldStop()
+        restoreEffects()
+    end
+    Hub:Section("Packs","Pack opening",false)
+    add("Packs","open","Auto Open")
+    Hub:Label("Packs","Opening mode","Mature packs on own plot")
+    Hub:Section("Progress","Individual upgrades",false)
+    add("Progress","base","Auto Base Upgrade")
+    add("Progress","luck","Auto Luck Upgrade")
+    add("Progress","tread","Auto Treadmill Upgrade")
+    Hub:Section("Progress","Rebirth resets progression",false)
+    add("Progress","rebirth","Auto Rebirth")
+    Hub:Section("Progress","Gear",false)
+    add("Progress","gear","Equip Best Gears")
+    Hub:Section("Settings","Visuals",false)
+    Hub:Toggle("Settings","Reduce Visual Effects",false,function(value) enabled.graphics=value;if not value then restoreEffects() end end)
+    Hub:Toggle("Settings","No Camera Shake",false,function(value)
+        local ok,result=invoke("Settings","Update",{Id="CameraShake",Value=not value})
+        if not ok or result~=(not value) then warn("[AGONY] Camera shake setting not confirmed") end
+    end)
+    local incomeLabel=Hub:Label("Progress","Estimated Full Income/s","Unavailable")
+    local jobs={
+        {"open",3,autoOpen},
+        {"gear",10,function() if config("ItemConfig") then request("gear","Items","EquipBest") else status("gear","Config unavailable") end end},
+        {"base",5,function() paidUpgrade("base","BaseUpgradeConfig","GetPriceForNextLevel","BaseUpgradeLevel","BaseUpgrade","Purchase",{}) end},
+        {"luck",5,function() paidUpgrade("luck","LuckMachineConfig","GetPrice","HatchLuckLevel","LuckMachine","Upgrade","One") end},
+        {"tread",5,function() if not isTraining() then status("tread","Train on own treadmill");return end;paidUpgrade("tread","TreadmillConfig","GetPriceForNextLevel","TreadmillLevel","Treadmill","Upgrade",{}) end},
+        {"rebirth",10,rebirth}
+    }
+    task.spawn(function()
+        local due={}
+        while not disposed do
+            local now=os.clock()
+            for _,job in ipairs(jobs) do
+                local key=job[1]
+                if enabled[key] and not disposed and now>=(due[key] or 0) then
+                    due[key]=now+job[2]
+                    if upgradeRequested and (key=="base" or key=="luck" or key=="tread") then status(key,"Upgrade All active") else
+                        local ok,err=pcall(job[3])
+                        if not ok then status(key,"Error - see console");report("extra_"..key,err) end
+                    end
+                end
+            end
+            if enabled.graphics and not disposed then
+                for _,object in ipairs(workspace:GetDescendants()) do
+                    if disposed or not enabled.graphics then break end
+                    if object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam") then
+                        if effects[object]==nil then effects[object]=object.Enabled end
+                        pcall(function() object.Enabled=false end)
+                    end
+                end
+            end
+            local cfg=config("CharacterConfig")
+            local rate=cfg and cfg.OfflineIncome and tonumber(cfg.OfflineIncome.Rate)
+            local offline=num("OfflineIncomePerSecond")
+            if rate and rate>0 and offline then setStatus(incomeLabel,string.format("%.3g",offline/rate)) end
+            task.wait(1)
+        end
+        restoreEffects()
+    end)
+end
+addRecoveredFeatures(Hub)
 Hub:Button("Settings", "Unload UI", "UNLOAD", function()
     controller.Stop()
     Hub:Destroy()
@@ -2546,12 +2323,11 @@ if gui then gui.Destroying:Connect(controller.Stop) end
 Hub:ShowTab("Home")
 task.spawn(function()
     while not disposed do
-        if requested or placeRequested or gameLogic.flags.open and gameLogic.openNeedsHome and os.clock()>=(gameLogic.next.openHome or 0) then
+        if requested or placeRequested then
             running = true
             local revisionBeforeCycle = spawnRevision
             local ok, nextImmediately = pcall(function()
                 if not leaveTraining() then publish("Leaving treadmill");return false end
-                if gameLogic.openHomeCycle() then return false end
                 if placeRequested and carrying()==false and placeCycle() then return false end
                 if requested then return cycle() end
                 return false
@@ -2572,7 +2348,7 @@ task.spawn(function()
                     MovementRunService.Heartbeat:Wait()
                 end
             end
-        elseif treadmillRequested or gameLogic.flags.admin then
+        elseif treadmillRequested then
             running = true
             local ok, err = pcall(treadmillCycle)
             if not ok then
@@ -2589,8 +2365,8 @@ task.spawn(function()
 end)
 task.spawn(function()
     while not disposed do
-        if boostEnabled and (isTraining() or treadmillRequested or gameLogic.flags.admin) then
-            local ok,err=pcall(function() gameLogic.bindBoost();scanBoost() end)
+        if boostEnabled and (isTraining() or treadmillRequested) then
+            local ok,err=pcall(scanBoost)
             if not ok then report("boost_error",err) end
         elseif pendingBoost or boostDiagnosticKey~="" then resetBoost() end
         task.wait(CONFIG.BoostScanInterval)
@@ -2599,45 +2375,31 @@ end)
 task.spawn(function()
     while not disposed do
         if equipRequested then
-            local records=gameLogic.records()
-            local signature={}
-            if records then for _,record in ipairs(records) do if gameLogic.isCharacter(record)==true and not gameLogic.placed(record) then table.insert(signature,record.Id) end end end
-            table.sort(signature)
-            local sig=table.concat(signature,"|")
-            if records and sig~="" and (sig~=gameLogic.equipSignature or os.clock()>=(gameLogic.next.equip or 0)) then
-            gameLogic.equipSignature=sig;gameLogic.next.equip=os.clock()+60
             local ok,result=invoke("Packs","EquipBest",{})
-            if equipRequested and not disposed then setStatus(equipStatusLabel,ok and (result==true or type(result)=="table" and result.Success==true) and "Equipped" or "Request failed") end
-            elseif records and sig=="" then setStatus(equipStatusLabel,"No backpack characters")
-            elseif not records then setStatus(equipStatusLabel,"Waiting for inventory") end
+            if equipRequested and not disposed then setStatus(equipStatusLabel,ok and result~=false and "Requested" or "Request failed") end
             task.wait(4)
-        else gameLogic.equipSignature=nil;task.wait(.2) end
+        else task.wait(.2) end
     end
 end)
 task.spawn(function()
-    local jobs={
-        {"open",2,function() gameLogic.openStep() end},
-        {"tread",4,function() gameLogic.note("tread",gameLogic.upgradeStep("tread")) end},
-        {"base",4,function() gameLogic.note("base",gameLogic.upgradeStep("base")) end},
-        {"luck",4,function() gameLogic.note("luck",gameLogic.upgradeStep("luck")) end},
-        {"rebirth",10,function() gameLogic.note("rebirth",gameLogic.rebirthStep()) end},
-        {"gear",15,function() local ok,reason=gameLogic.request("Items","EquipBest");gameLogic.note("gear",ok and "Equipped best gears" or (type(reason)=="string" and reason or "Rejected")) end},
-        {"aura",8,function() gameLogic.note("aura",gameLogic.auraStep()) end},
-        {"coach",8,function() gameLogic.note("coach",gameLogic.coachStep()) end}
-    }
+    local auraRequested=false
     while not disposed do
-        for _,job in ipairs(jobs) do
-            if disposed then break end
-            local key=job[1]
-            local enabled=gameLogic.flags[key] or upgradeRequested and (key=="tread" or key=="base" or key=="luck") or key=="aura" and (gameLogic.flags.buyAura or gameLogic.flags.equipAura) or key=="coach" and (gameLogic.flags.buyCoach or gameLogic.flags.equipCoach)
-            if enabled and os.clock()>=(gameLogic.next[key] or 0) then
-                gameLogic.next[key]=os.clock()+job[2]
-                local ok,err=pcall(job[3])
-                if not ok then gameLogic.note(key,"Error - see console");report("game_"..key,err);gameLogic.next[key]=os.clock()+10 end
+        if upgradeRequested then
+            local requests={{"Treadmill","Upgrade",{}},{"BaseUpgrade","Purchase",{}},{"LuckMachine","Upgrade","One"}}
+            local sent=0
+            for _,entry in ipairs(requests) do
+                if disposed or not upgradeRequested then break end
+                local ok,result=invoke(entry[1],entry[2],entry[3])
+                if ok and result~=false then sent+=1 end
+                task.wait(.2)
             end
-        end
-        if upgradeRequested then setStatus(upgradeStatusLabel,"Checking affordable upgrades") end
-        task.wait(.25)
+            if upgradeRequested and not disposed and not auraRequested then
+                auraRequested=true
+                upgradeAura()
+            end
+            if upgradeRequested and not disposed then setStatus(upgradeStatusLabel,tostring(sent).."/3 requests sent") end
+            task.wait(2)
+        else auraRequested=false;task.wait(.2) end
     end
 end)
-print("[AGONY HUB] V26 ready. All automation OFF by default.")
+print("[AGONY HUB] V28 ready. All automation OFF by default.")
