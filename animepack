@@ -1,0 +1,2643 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+if game.PlaceId~=133151378618377 then warn("[AGONY HUB] Unsupported place");return end
+local CONFIG = {
+    Stage = 1,
+    TweenSpeed = 100,
+    MinTweenSpeed = 20,
+    MaxTweenSpeed = 150,
+    PickupAckTimeout = 2.5,
+    MinTweenDuration = 0.60,
+    PickupDistance = 4,
+    PickupTimeout = 8,
+    PromptRefreshTimeout = 2,
+    CarryConfirmTime = 0.35,
+    EmptyConfirmTime = 0.65,
+    MovementCorrectionTolerance = 8,
+    RecoveryDelay = 2,
+    MoveTolerance = 3,
+    ReturnTimeout = 5,
+    ArrivalTolerance = 10,
+    DeliverySettleTime = 1.0,
+    DeliveryStableTime = 0.35,
+    DeliverySettleTimeout = 4,
+    RetryDelay = 0.25,
+    SafeZone = CFrame.new(1196.72034, 67.0762939, -372.415588, -1, 0, 0, 0, 1, 0, 0, 0, -1),
+    SafeZoneHeightOffset = 0,
+    TreadmillSearchInterval = 1,
+    TreadmillSeatOffset = 2.5,
+    TreadmillArrivalRadius = 1.5,
+    TreadmillExitRadius = 8,
+    TreadmillSettleTime = 0.5,
+    BoostScanInterval = 0.08,
+}
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local MovementRunService = game:GetService("RunService")
+local RS = game:GetService("ReplicatedStorage")
+local player = Players.LocalPlayer
+assert(player, "Client required")
+local env = type(getgenv) == "function" and getgenv() or _G
+local previous = env.AgonyAutoSteal
+if previous and type(previous.Stop) == "function" then
+    pcall(previous.Stop)
+end
+local gameLogic={flags={},modules={},status={},next={},connections={},pending={},refused={},saved={},filters={}}
+function gameLogic.module(name,kind)
+    local shared=RS:FindFirstChild("Shared")
+    local parent=shared and shared:FindFirstChild(kind or "Configs")
+    local item=parent and parent:FindFirstChild(name)
+    if not item or not item:IsA("ModuleScript") then return nil end
+    if gameLogic.modules[item] then return gameLogic.modules[item] end
+    local ok,value=pcall(require,item)
+    if ok and type(value)=="table" then gameLogic.modules[item]=value;return value end
+end
+function gameLogic.data(key)
+    local shared=RS:FindFirstChild("Shared")
+    local modules=shared and shared:FindFirstChild("Modules")
+    local receiver=modules and modules:FindFirstChild("DataReceiver")
+    local item=receiver and receiver:FindFirstChild("PlayerData")
+    if not item then return nil end
+    local data=gameLogic.modules[item]
+    if not data then
+        local ok,value=pcall(require,item)
+        if not ok or type(value)~="table" then return nil end
+        data=value;gameLogic.modules[item]=value
+    end
+    if type(data.Get)~="function" then return nil end
+    local ok,value=pcall(data.Get,key)
+    if ok then return value end
+end
+function gameLogic.num(key) return tonumber(gameLogic.data(key)) end
+function gameLogic.records()
+    local inv=gameLogic.data("Inventory")
+    if type(inv)~="table" or type(inv.Packs)~="table" then return nil end
+    local result={}
+    for _,v in pairs(inv.Packs) do
+        if type(v)=="table" and type(v.Id)=="string" then table.insert(result,v) end
+    end
+    return result
+end
+function gameLogic.isCharacter(record)
+    local cfg=gameLogic.module("PacksConfig")
+    if not cfg or type(cfg.IsCharacter)~="function" then return nil end
+    local ok,value=pcall(cfg.IsCharacter,record)
+    if ok and type(value)=="boolean" then return value end
+end
+function gameLogic.placed(record)
+    return tonumber(record.RelativeX)~=nil and tonumber(record.RelativeZ)~=nil
+end
+function gameLogic.ownPlot()
+    local shared=RS:FindFirstChild("Shared")
+    local modules=shared and shared:FindFirstChild("Modules")
+    local receiver=modules and modules:FindFirstChild("DataReceiver")
+    local item=receiver and receiver:FindFirstChild("ServerData")
+    local plots=workspace:FindFirstChild("Plots")
+    if not plots then return nil end
+    if item then
+        local data=gameLogic.modules[item]
+        if not data then local ok,value=pcall(require,item);if ok and type(value)=="table" then data=value;gameLogic.modules[item]=value end end
+        if data and type(data.Get)=="function" then
+            local ok,records=pcall(data.Get,"Plots")
+            if ok and type(records)=="table" then
+                for _,record in pairs(records) do
+                    if type(record)=="table" and tonumber(record.Owner)==player.UserId then
+                        local plot=plots:FindFirstChild(tostring(record.Name))
+                        if plot then return plot end
+                    end
+                end
+            end
+        end
+    end
+    for _,model in ipairs(plots:GetChildren()) do
+        local plot=model.Name=="PlotModel" and model or model:FindFirstChild("PlotModel")
+        if plot and tonumber(plot:GetAttribute("PlotOwnerUserId"))==player.UserId then return model end
+    end
+end
+local running = false
+local requested = false
+local treadmillRequested = false
+local boostEnabled = false
+local placeRequested = false
+local equipRequested = false
+local upgradeRequested = false
+local adaptiveSpeed = false
+local placeStatusLabel, equipStatusLabel, upgradeStatusLabel
+local function setStatus(label, value)
+    if label and label.Parent then label.Text = value end
+end
+local boostSeen = setmetatable({}, {__mode = "k"})
+local pendingBoost
+local boostDiagnosticKey = ""
+local lastBoostScan = 0
+local lastBoostStatus = "Waiting for TAP!"
+local treadmillArrived = false
+local treadmillRoot
+local treadmillArrivedAt = 0
+local treadmillStatusLabel
+local disposed = false
+local statusLabel
+local function publish(message)
+    if statusLabel and statusLabel.Parent then statusLabel.Text = message end
+end
+local function publishTreadmill(message)
+    if treadmillStatusLabel and treadmillStatusLabel.Parent then treadmillStatusLabel.Text = message end
+end
+local activeTween, activePrompt
+local recoveryUntil = 0
+local controller = {}
+local disconnectPackWatch = function() end
+env.AgonyAutoSteal = controller
+local lastLog = {}
+local function log(message)
+    print("[AGONY Farm V26] " .. tostring(message))
+end
+local function report(key, message)
+    local now = os.clock()
+    if not lastLog[key] or now - lastLog[key] >= 8 then
+        lastLog[key] = now
+        warn("[AGONY Farm V26] " .. tostring(message))
+    end
+end
+local function releasePrompt()
+    local prompt = activePrompt
+    activePrompt = nil
+    if prompt then pcall(function() prompt:InputHoldEnd() end) end
+end
+local function pauseWorker()
+    requested = false
+    running = false
+    if activeTween then pcall(function() activeTween:Cancel() end) end
+    releasePrompt()
+    publish("Idle")
+end
+function controller.Stop()
+    disposed = true
+    placeRequested = false
+    equipRequested = false
+    upgradeRequested = false
+    treadmillRequested = false
+    boostEnabled = false
+    disconnectPackWatch()
+    for _,connection in ipairs(gameLogic.connections) do pcall(function() connection:Disconnect() end) end
+    table.clear(gameLogic.connections)
+    if gameLogic.restoreGraphics then gameLogic.restoreGraphics() end
+    pauseWorker()
+end
+function controller.SetStage(stage)
+    assert(type(stage) == "number" and stage >= 1 and stage % 1 == 0, "Stage must be a positive integer")
+    CONFIG.Stage = stage
+    log("Selected Stage" .. stage)
+end
+function controller.SetTweenSpeed(value)
+    local number = tonumber(value)
+    if not number or number ~= number or number == math.huge or number == -math.huge then
+        return CONFIG.TweenSpeed, false
+    end
+    CONFIG.TweenSpeed = math.clamp(math.floor(number + 0.5), CONFIG.MinTweenSpeed, CONFIG.MaxTweenSpeed)
+    log("Tween speed: " .. CONFIG.TweenSpeed .. " studs/s (next movement)")
+    return CONFIG.TweenSpeed, true
+end
+local function root()
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return nil end
+    return character:FindFirstChild("HumanoidRootPart")
+end
+local function stageFolder()
+    local gameFolder = workspace:FindFirstChild("Game")
+    local packs = gameFolder and gameFolder:FindFirstChild("Packs")
+    local stage = packs and packs:FindFirstChild("Stage" .. CONFIG.Stage)
+    return stage and stage:FindFirstChild("SpawnedPacks")
+end
+local function promptPosition(prompt)
+    if not prompt or not prompt.Parent then return nil end
+    local parent = prompt.Parent
+    if parent:IsA("Attachment") then return parent.WorldPosition end
+    if parent:IsA("BasePart") then return parent.Position end
+    if parent:IsA("Model") then return parent:GetPivot().Position end
+    return nil
+end
+local function getPrompt(model)
+    for _, item in ipairs(model:GetDescendants()) do
+        if item:IsA("ProximityPrompt") and item.Enabled and item.Name == "StealPrompt" then
+            return item
+        end
+    end
+end
+local watchedFolder, packConnections = nil, {}
+local spawnRevision = 0
+local freshPacks = setmetatable({}, {__mode = "k"})
+local function directPack(instance, folder)
+    while instance and instance.Parent ~= folder do instance = instance.Parent end
+    if instance and instance:IsA("Model") and instance.Name ~= "PackAreaRock" then return instance end
+end
+local function markPack(model)
+    if not model then return end
+    freshPacks[model] = true
+    spawnRevision = spawnRevision + 1
+end
+disconnectPackWatch = function()
+    for _, connection in ipairs(packConnections) do connection:Disconnect() end
+    table.clear(packConnections)
+    table.clear(freshPacks)
+    watchedFolder = nil
+end
+local function watchPacks(folder)
+    if watchedFolder == folder then return end
+    disconnectPackWatch()
+    watchedFolder = folder
+    if not folder then return end
+    table.insert(packConnections, folder.ChildAdded:Connect(function(child)
+        if not disposed and watchedFolder == folder then markPack(directPack(child, folder)) end
+    end))
+    table.insert(packConnections, folder.DescendantAdded:Connect(function(item)
+        if not disposed and watchedFolder == folder and item:IsA("ProximityPrompt") and item.Name == "StealPrompt" then
+            markPack(directPack(item, folder))
+        end
+    end))
+    table.insert(packConnections, folder.ChildRemoved:Connect(function(child)
+        freshPacks[child] = nil
+    end))
+end
+local function choosePack(folder, hrp)
+    local bestModel, bestPrompt, bestDistance = nil, nil, math.huge
+    local bestFresh = false
+    local bestHeight = -math.huge
+    local bestLuck = -math.huge
+    local cfg=gameLogic.module("PacksConfig")
+    for _, model in ipairs(folder:GetChildren()) do
+        if model:IsA("Model") and model.Name ~= "PackAreaRock" then
+            local prompt = getPrompt(model)
+            local pos = promptPosition(prompt)
+            if pos then
+                local distance = (hrp.Position - pos).Magnitude
+                local fresh = freshPacks[model] == true
+                local proxy=model:FindFirstChild("ProxyPart")
+                local height=proxy and proxy:IsA("BasePart") and proxy.Position.Y or pos.Y
+                local luck=1
+                if cfg and type(cfg.Get)=="function" and type(cfg.GetDisplayLuck)=="function" then
+                    local ok,record=pcall(cfg.Get,model.Name)
+                    if ok and type(record)=="table" then local valid,value=pcall(cfg.GetDisplayLuck,record);if valid then luck=tonumber(value) or 1 end end
+                end
+                local better=not bestModel or (fresh and not bestFresh) or (fresh==bestFresh and (height>bestHeight+0.1 or (math.abs(height-bestHeight)<=0.1 and distance<bestDistance)))
+                if gameLogic.flags.bestLuck then better=not bestModel or luck>bestLuck or (luck==bestLuck and distance<bestDistance) end
+                local minLuck=tonumber(gameLogic.filters.minLuck) or 0
+                if luck>=minLuck and better then
+                    bestModel,bestPrompt,bestDistance=model,prompt,distance
+                    bestFresh,bestHeight,bestLuck=fresh,height,luck
+                end
+            end
+        end
+    end
+    return bestModel, bestPrompt
+end
+local speedCurve = {{0,16},{10,18.8},{10000,36.27},{40000,64.25},{170000,84.97},{700000,101.55},{2500000,117.1},{18000000,134.72},{700000000,157.51},{2500000000,207.25},{10000000000,214},{100000000000,228},{1000000000000,250},{10000000000000,265},{100000000000000,280},{1000000000000000,295},{10000000000000000,310},{100000000000000000,325},{1000000000000000000,340}}
+local speedUnits={K=1e3,M=1e6,B=1e9,T=1e12,QA=1e15,QI=1e18}
+local function earnedSpeed()
+    local stats=player:FindFirstChild("leaderstats")
+    local stat=stats and stats:FindFirstChild("Speed")
+    if not stat then return nil end
+    local value=stat.Value
+    local number=tonumber(value)
+    if not number and type(value)=="string" then
+        local cleaned=value:gsub("[,%s]",""):upper()
+        local amount,unit=cleaned:match("^([%d%.]+)(%a+)$")
+        number=tonumber(cleaned) or (tonumber(amount) and speedUnits[unit] and tonumber(amount)*speedUnits[unit])
+    end
+    if not number or number~=number or number<0 then return nil end
+    for i=1,#speedCurve-1 do
+        local a,b=speedCurve[i],speedCurve[i+1]
+        if number<=b[1] then return a[2]+(b[2]-a[2])*math.clamp((number-a[1])/(b[1]-a[1]),0,1) end
+    end
+    return 340
+end
+local function tweenTo(destination, speed, onStep)
+    local hrp = root()
+    if not running or not hrp then return false, "interrupted" end
+    local origin = hrp.CFrame
+    local distance = (origin.Position - destination.Position).Magnitude
+    if distance <= 0.25 then return true end
+    local goal = CFrame.new(destination.Position) * origin.Rotation
+    local rate = math.clamp(speed or CONFIG.TweenSpeed, CONFIG.MinTweenSpeed, CONFIG.MaxTweenSpeed)
+    if adaptiveSpeed then
+        local earned=earnedSpeed()
+        if earned then rate=math.min(rate,math.max(16,earned)) end
+    end
+    local duration = math.max(CONFIG.MinTweenDuration, distance / rate)
+    local proxy = Instance.new("CFrameValue")
+    proxy.Value = origin
+    local tween = TweenService:Create(proxy, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Value = goal})
+    activeTween = tween
+    local lastWritten = origin.Position
+    local deadline = os.clock() + duration + 5
+    local function finish(ok, reason)
+        if tween.PlaybackState ~= Enum.PlaybackState.Completed then tween:Cancel() end
+        if activeTween == tween then activeTween = nil end
+        proxy:Destroy()
+        return ok, reason
+    end
+    tween:Play()
+    while running and root() == hrp and os.clock() < deadline do
+        local dt = MovementRunService.Heartbeat:Wait()
+        if not running or root() ~= hrp or tween.PlaybackState == Enum.PlaybackState.Cancelled then
+            return finish(false, "interrupted")
+        end
+        if onStep then
+            local proceed, reason = onStep()
+            if not proceed then return finish(reason == "in_range", reason or "state_changed") end
+        end
+        local actual = hrp.Position
+        if (actual - lastWritten).Magnitude > CONFIG.MovementCorrectionTolerance then
+            recoveryUntil = os.clock() + CONFIG.RecoveryDelay
+            report("position_jump", "External position change detected; movement cancelled, no snap or correction applied.")
+            return finish(false, "position_changed")
+        end
+        local delta = proxy.Value.Position - actual
+        local maxStep = rate * math.clamp(dt or 0, 0, 0.10)
+        if delta.Magnitude > maxStep and delta.Magnitude > 0 then
+            delta = delta.Unit * maxStep
+        end
+        if delta.Magnitude > 0 then
+            local nextPosition = actual + delta
+            hrp.CFrame = CFrame.new(nextPosition) * origin.Rotation
+            lastWritten = nextPosition
+        else
+            lastWritten = actual
+        end
+        if tween.PlaybackState == Enum.PlaybackState.Completed and (hrp.Position - goal.Position).Magnitude <= 0.25 then
+            return finish(true)
+        end
+    end
+    return finish(false, "interrupted")
+end
+local serverData
+local function loadState()
+    if serverData then return true end
+    local shared = RS:FindFirstChild("Shared")
+    local modules = shared and shared:FindFirstChild("Modules")
+    local receiver = modules and modules:FindFirstChild("DataReceiver")
+    local module = receiver and receiver:FindFirstChild("ServerData")
+    if not module then return false end
+    local ok, result = pcall(require, module)
+    if ok and type(result) == "table" and type(result.Get) == "function" then serverData = result end
+    return serverData ~= nil
+end
+local function carrying()
+    if not loadState() then return nil end
+    local ok, state = pcall(serverData.Get, "Stealing")
+    if not ok then return nil end
+    if state == nil then return false end
+    if type(state) ~= "table" then return nil end
+    local entry = state[tostring(player.UserId)]
+    if entry == nil or entry == false then return false end
+    if type(entry) ~= "table" or entry.Id == nil then return nil end
+    return true, tostring(entry.Id)
+end
+local function waitForState(expected, timeout, stableTime)
+    local deadline = os.clock() + timeout
+    local confirmedSince, confirmedId
+    local hrp = root()
+    repeat
+        if not running or not hrp or root() ~= hrp then return false end
+        local state, id = carrying()
+        if state == expected then
+            if not confirmedSince or confirmedId ~= id then
+                confirmedSince, confirmedId = os.clock(), id
+            end
+            if os.clock() - confirmedSince >= (stableTime or 0) then return true, id end
+        else
+            confirmedSince, confirmedId = nil, nil
+        end
+        MovementRunService.Heartbeat:Wait()
+    until os.clock() >= deadline
+    return false
+end
+local function approach(prompt)
+    local hrp, pos = root(), promptPosition(prompt)
+    if not hrp or not pos then return false end
+    local offset = hrp.Position - pos
+    local horizontal = Vector3.new(offset.X, 0, offset.Z)
+    if horizontal.Magnitude < 0.01 then horizontal = Vector3.new(0, 0, 1) end
+    local distance = math.min(CONFIG.PickupDistance, math.max(0.5, prompt.MaxActivationDistance * 0.5))
+    local target = pos + horizontal.Unit * distance
+    if offset.Magnitude <= math.min(prompt.MaxActivationDistance * 0.8, distance + 2) then return true end
+    return tweenTo(CFrame.new(target), CONFIG.TweenSpeed, function()
+        if carrying() ~= false then return false, "state_changed" end
+        local currentPos = promptPosition(prompt)
+        if not currentPos or not prompt.Enabled then return false, "target_changed" end
+        if (hrp.Position - currentPos).Magnitude <= math.min(prompt.MaxActivationDistance * 0.8, distance + 2) then
+            return false, "in_range"
+        end
+        return true
+    end)
+end
+local function holdPrompt(prompt)
+    local hrp, pos = root(), promptPosition(prompt)
+    if not running or not hrp or not pos or not prompt.Enabled then return false end
+    if (hrp.Position - pos).Magnitude > prompt.MaxActivationDistance then
+        report("distance", "Outside prompt activation range after tween.")
+        return false
+    end
+    local state = carrying()
+    if state == true then return waitForState(true, CONFIG.PickupTimeout, CONFIG.CarryConfirmTime) end
+    if state ~= false then return false end
+    activePrompt = prompt
+    local holdDuration = math.max(0, prompt.HoldDuration)
+    local ok, err = pcall(function() prompt:InputHoldBegin() end)
+    if not ok then
+        releasePrompt()
+        report("prompt", "Native prompt hold unavailable: " .. tostring(err))
+        return false
+    end
+    local deadline = os.clock() + holdDuration + 0.25
+    while running and root() == hrp and os.clock() < deadline do
+        if carrying() == true then break end
+        local currentPos = promptPosition(prompt)
+        if not currentPos or not prompt.Enabled or (hrp.Position - currentPos).Magnitude > prompt.MaxActivationDistance then break end
+        MovementRunService.Heartbeat:Wait()
+    end
+    releasePrompt()
+    if not running or root() ~= hrp then return false end
+    publish("Confirming pickup")
+    return waitForState(true, CONFIG.PickupAckTimeout, CONFIG.CarryConfirmTime)
+end
+local function settleAfterDelivery(hrp)
+    local start = os.clock()
+    local last = hrp.Position
+    local stableSince = start
+    while running and root() == hrp do
+        local now = os.clock()
+        local current = hrp.Position
+        if (current - last).Magnitude > 0.75 then
+            stableSince = now
+        end
+        last = current
+        if now - start >= CONFIG.DeliverySettleTime and now - stableSince >= CONFIG.DeliveryStableTime then
+            return true
+        end
+        if now - start >= CONFIG.DeliverySettleTimeout then return false end
+        MovementRunService.Heartbeat:Wait()
+    end
+    return false
+end
+local function returnToSafeZone()
+    if not running then return end
+    local confirmed, carryId = waitForState(true, CONFIG.PickupTimeout, CONFIG.CarryConfirmTime)
+    if not confirmed then
+        publish("Pickup not confirmed")
+        return
+    end
+    local hrp = root()
+    if not hrp then return end
+    local decorations=workspace:FindFirstChild("Decorations")
+    local folder=decorations and decorations:FindFirstChild("Idk")
+    local safe=folder and folder:FindFirstChild("SafeZone")
+    local target=(safe and safe:IsA("BasePart") and safe.CFrame*CFrame.new(0,0,5) or CONFIG.SafeZone)+Vector3.new(0,CONFIG.SafeZoneHeightOffset,0)
+    publish("Returning to SafeZone")
+    log("Carrying confirmed; returning to SafeZone")
+    local clearedDistance
+    local function observeCarry()
+        if root() ~= hrp then return false, "interrupted" end
+        local state, id = carrying()
+        if state == false then
+            clearedDistance = (hrp.Position - target.Position).Magnitude
+            return false, "carry_cleared"
+        end
+        if state ~= true or id ~= carryId then return false, "state_changed" end
+        return true
+    end
+    if (hrp.Position - target.Position).Magnitude > CONFIG.MoveTolerance then
+        local reached, reason = tweenTo(target, CONFIG.TweenSpeed, observeCarry)
+        if not running or root() ~= hrp then return end
+        if not reached and reason ~= "carry_cleared" then
+            publish("Return incomplete")
+            report("position", "Return movement interrupted; no final position snap applied.")
+            return
+        end
+    end
+    if clearedDistance == nil then
+        publish("Waiting at SafeZone")
+        if not waitForState(false, CONFIG.ReturnTimeout) then
+            report("return", "Carrying state did not clear; no forced position correction.")
+            return
+        end
+        if not running or root() ~= hrp then return end
+        clearedDistance = (hrp.Position - target.Position).Magnitude
+    end
+    if clearedDistance <= CONFIG.ArrivalTolerance then
+        publish("Delivery settling")
+        log("Carry cleared near SafeZone; return movement stopped.")
+    else
+        publish("Carry ended - settling")
+        report("carry_ended", "Carry cleared " .. string.format("%.1f", clearedDistance) .. " studs from target; delivery not verified.")
+    end
+    if not settleAfterDelivery(hrp) then
+        if running then publish("Position settling - retry later") end
+        return
+    end
+    if not running then return end
+    publish(clearedDistance <= CONFIG.ArrivalTolerance and "SafeZone reached" or "Carry ended")
+end
+local lastFolder
+local function refreshPrompt(model, folder)
+    local deadline = os.clock() + CONFIG.PromptRefreshTimeout
+    repeat
+        if not running or not model:IsDescendantOf(folder) or stageFolder() ~= folder then return nil end
+        if carrying() ~= false then return nil end
+        local prompt = getPrompt(model)
+        if prompt and promptPosition(prompt) then return prompt end
+        MovementRunService.Heartbeat:Wait()
+    until os.clock() >= deadline
+    return nil
+end
+local function cycle()
+    local hrp = root()
+    if not hrp then publish("Waiting for character"); report("character", "Waiting for character."); return false end
+    if os.clock() < recoveryUntil then publish("Movement paused - settling"); return false end
+    if recoveryUntil > 0 then
+        if not settleAfterDelivery(hrp) then return false end
+        recoveryUntil = 0
+    end
+    local state = carrying()
+    if state == nil then publish("Waiting for data"); report("state", "Replicated carrying state unavailable; no pickup attempted."); return false end
+    if state then returnToSafeZone(); return false end
+    if not waitForState(false, CONFIG.PickupTimeout, CONFIG.EmptyConfirmTime) then return false end
+    local folder = stageFolder()
+    watchPacks(folder)
+    if not folder then
+        publish("Waiting for stage")
+        report("stage", "Not loaded: Workspace.Game.Packs.Stage" .. CONFIG.Stage .. ".SpawnedPacks")
+        return false
+    end
+    if folder ~= lastFolder then lastFolder = folder; log("Stage resolved: " .. folder:GetFullName()) end
+    local model, prompt = choosePack(folder, hrp)
+    if not model then publish("Waiting for packs"); report("pack", "No available pack with enabled StealPrompt in selected stage."); return false end
+    freshPacks[model] = nil
+    local attempt = 0
+    while running do
+        attempt = attempt + 1
+        if not running or root() ~= hrp or stageFolder() ~= folder then return false end
+        state = carrying()
+        if state == true then returnToSafeZone(); return true end
+        if state ~= false then return false end
+        if not model:IsDescendantOf(folder) then break end
+        prompt = refreshPrompt(model, folder)
+        if not prompt then
+            if carrying() == true then returnToSafeZone(); return true end
+            break
+        end
+        publish("Moving to pack")
+        log("Moving to " .. model.Name .. " (attempt " .. attempt .. ")")
+        local approached, reason = approach(prompt)
+        if reason == "position_changed" then
+            publish("Movement paused - position changed")
+            return false
+        end
+        if not running or root() ~= hrp or stageFolder() ~= folder then return false end
+        state = carrying()
+        if state == true then returnToSafeZone(); return true end
+        if state ~= false then return false end
+        if approached and model:IsDescendantOf(folder) then
+            local currentPrompt = getPrompt(model)
+            if currentPrompt then
+                publish("Picking up (attempt " .. attempt .. ")")
+                log("Holding StealPrompt for " .. tostring(currentPrompt.HoldDuration) .. "s")
+                if holdPrompt(currentPrompt) then returnToSafeZone(); return true end
+            end
+        end
+        if not running or root() ~= hrp then return false end
+        state = carrying()
+        if state == true then returnToSafeZone(); return true end
+        if state ~= false then return false end
+        publish("Pickup retry " .. attempt)
+        MovementRunService.Heartbeat:Wait()
+    end
+    if not running then return false end
+    if carrying() == true then returnToSafeZone(); return true end
+    if carrying() ~= false then return false end
+    freshPacks[model] = nil
+    publish("Checking next pack")
+    report("pickup", "Target unavailable; checking other live packs.")
+    return true
+end
+local function isTraining()
+    local value = player:GetAttribute("TrainingOnTreadmill")
+    return value == true or (type(value) == "string" and value:match("^Level[1-9]%d*$") ~= nil)
+end
+local function resetBoost()
+    table.clear(boostSeen)
+    pendingBoost = nil
+    boostDiagnosticKey = ""
+    lastBoostScan = 0
+    lastBoostStatus = "Waiting for TAP!"
+end
+local function visibleBoostObject(object, gui)
+    local current = object
+    while current and current ~= gui do
+        if current:IsA("GuiObject") and not current.Visible then return false end
+        if current:IsA("LayerCollector") and not current.Enabled then return false end
+        current = current.Parent
+    end
+    return current == gui and object.AbsoluteSize.X > 1 and object.AbsoluteSize.Y > 1
+end
+local function clickBoost(button, gui)
+    if not visibleBoostObject(button, gui) or not isTraining() then return false, "TAP unavailable" end
+    if type(firesignal)=="function" then
+        local ok=pcall(firesignal,button.Activated)
+        if ok then return true,1 end
+    end
+    if type(getconnections) ~= "function" then return false, "Boost connection API unavailable" end
+    local ok, connections = pcall(getconnections, button.Activated)
+    if not ok or type(connections) ~= "table" then return false, "Cannot read TAP handlers" end
+    local count = 0
+    for _, connection in ipairs(connections) do
+        if not boostEnabled or disposed or not isTraining() then break end
+        local fired = false
+        local success = pcall(function()
+            if connection.Enabled ~= false and type(connection.Fire) == "function" then
+                connection:Fire()
+                fired = true
+            end
+        end)
+        if success and fired then count += 1 end
+    end
+    if count == 0 then return false, "No callable TAP handlers" end
+    return true, count
+end
+local function checkBoostConfirmation()
+    if not pendingBoost then return end
+    local combo = tonumber(player:GetAttribute("TreadmillCombo")) or 0
+    local multiplier = tonumber(player:GetAttribute("TreadmillBoostMultiplier")) or 0
+    local boosted = player:GetAttribute("TreadmillBoosted")
+    if combo > pendingBoost.combo or multiplier > pendingBoost.multiplier or (boosted == true and pendingBoost.boosted ~= true) then
+        lastBoostStatus = "Boost state increased"
+        log(lastBoostStatus .. " | Combo: " .. combo .. " | Multiplier: " .. multiplier)
+        pendingBoost = nil
+    elseif os.clock() >= pendingBoost.deadline then
+        lastBoostStatus = "No boost confirmation"
+        log(lastBoostStatus)
+        pendingBoost = nil
+    end
+end
+local function scanBoost()
+    if not boostEnabled or disposed then return end
+    local now = os.clock()
+    if now - lastBoostScan < CONFIG.BoostScanInterval then return end
+    lastBoostScan = now
+    if not isTraining() then
+        resetBoost()
+        publishTreadmill("Waiting for training")
+        return
+    end
+    checkBoostConfirmation()
+    local gui = player:FindFirstChildOfClass("PlayerGui")
+    if not gui then return end
+    local chosen
+    for _, layer in ipairs(gui:GetChildren()) do
+        if layer.Name == "UI" then
+            local prompt = layer:FindFirstChild("TAPTreadmillBoost")
+            local detector = prompt and prompt:FindFirstChild("Detector")
+            if detector and detector:IsA("GuiButton") and visibleBoostObject(detector, gui) then
+                if chosen then
+                    publishTreadmill("Multiple TAP buttons")
+                    return
+                end
+                chosen = detector
+            end
+        end
+    end
+    for button in pairs(boostSeen) do
+        if button ~= chosen then boostSeen[button] = nil end
+    end
+    if not chosen then
+        if not pendingBoost then lastBoostStatus = "Waiting for TAP!" end
+        boostDiagnosticKey = ""
+    elseif not boostSeen[chosen] and not pendingBoost then
+        if boostDiagnosticKey ~= "visible" then
+            boostDiagnosticKey = "visible"
+            log("TAP visible: " .. chosen:GetFullName())
+        end
+        local before = {
+            combo = tonumber(player:GetAttribute("TreadmillCombo")) or 0,
+            multiplier = tonumber(player:GetAttribute("TreadmillBoostMultiplier")) or 0,
+            boosted = player:GetAttribute("TreadmillBoosted")
+        }
+        local success, result = clickBoost(chosen, gui)
+        if success then
+            boostSeen[chosen] = true
+            before.deadline = os.clock() + 1.4
+            pendingBoost = before
+            lastBoostStatus = "TAP sent (awaiting confirmation)"
+            log(lastBoostStatus .. " | Handlers: " .. tostring(result))
+            checkBoostConfirmation()
+        else
+            lastBoostStatus = tostring(result)
+            report("boost_input", result)
+        end
+    end
+    publishTreadmill(lastBoostStatus)
+end
+local treadmillPart
+local treadmillTargetPart
+local nextTreadmillSearch = 0
+local function ownedTreadmillPart(part)
+    if not part or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then return false end
+    if part.Name ~= "Seat" and part.Name ~= "Primary" and part.Name ~= "TreadmilBox" then return false end
+    local plot=gameLogic.ownPlot()
+    local treadmill=plot and plot:FindFirstChild("Treadmil",true)
+    local model=treadmill and treadmill:FindFirstChild("PlayerTreadmill")
+    if model and part:IsDescendantOf(model) then return true end
+    local node = part
+    local inTreadmill = part.Name == "TreadmilBox"
+    local owner
+    while node and node ~= workspace do
+        if node.Name == "PlayerTreadmill" or node.Name == "Treadmil" then inTreadmill = true end
+        local value = node:GetAttribute("TreadmillOwnerUserId")
+        if value ~= nil and owner == nil then owner = tonumber(value) end
+        node = node.Parent
+    end
+    return inTreadmill and owner == player.UserId
+end
+local function resolveTreadmill()
+    local plot=gameLogic.ownPlot()
+    local treadmill=plot and (plot:FindFirstChild("Treadmil") or plot:FindFirstChild("Treadmil",true))
+    local model=treadmill and treadmill:FindFirstChild("PlayerTreadmill")
+    local direct=model and (model:FindFirstChild("Seat") or model:FindFirstChild("Primary") or model:FindFirstChild("TreadmilBox"))
+    if direct and direct:IsA("BasePart") then treadmillPart=direct;return direct end
+    if ownedTreadmillPart(treadmillPart) then return treadmillPart end
+    treadmillPart = nil
+    local now = os.clock()
+    if now < nextTreadmillSearch then return nil end
+    nextTreadmillSearch = now + CONFIG.TreadmillSearchInterval
+    local seats, boxes = {}, {}
+    for _, object in ipairs(workspace:GetDescendants()) do
+        if (object.Name == "Seat" or object.Name == "Primary" or object.Name == "TreadmilBox") and ownedTreadmillPart(object) then
+            local list = (object.Name == "Seat" or object.Name=="Primary") and seats or boxes
+            table.insert(list, object)
+        end
+    end
+    local candidates = #seats > 0 and seats or boxes
+    if #candidates ~= 1 then
+        if #candidates > 1 then report("treadmill_ambiguous", "Multiple owned treadmill targets; waiting for a unique target.") end
+        return nil
+    end
+    treadmillPart = candidates[1]
+    log("Owned treadmill found: " .. treadmillPart:GetFullName())
+    return treadmillPart
+end
+local function treadmillDestination(part)
+    local offset = (part.Name == "Seat" or part.Name=="Primary") and CONFIG.TreadmillSeatOffset or 0
+    return CFrame.new(part.Position + Vector3.new(0, offset, 0))
+end
+function gameLogic.adminStep()
+    if not gameLogic.flags.admin then return false end
+    local folder=workspace:FindFirstChild("AdminTreadmillEvent")
+    local model=folder and folder:FindFirstChildWhichIsA("Model")
+    if not model then gameLogic.note("admin","Waiting for event");return false end
+    local hrp=root()
+    if not hrp or carrying()~=false then return true end
+    local cf,size=model:GetBoundingBox()
+    local offset=cf:PointToObjectSpace(hrp.Position)
+    local gap=Vector2.new(math.max(math.abs(offset.X)-size.X/2,0),math.max(math.abs(offset.Z)-size.Z/2,0)).Magnitude
+    if isTraining() and gap<=6 then gameLogic.note("admin","Training on shared treadmill");return true end
+    if os.clock()<(gameLogic.next.admin or 0) then return true end
+    gameLogic.next.admin=os.clock()+3
+    if isTraining() then
+        local folder=RS:FindFirstChild("Remotes")
+        local group=folder and folder:FindFirstChild("Treadmill")
+        local event=group and group:FindFirstChild("ExitRequest")
+        if event and event:IsA("RemoteEvent") then pcall(event.FireServer,event) end
+        return true
+    end
+    local spot=cf:PointToWorldSpace(Vector3.new(math.clamp(offset.X,-size.X/2,size.X/2),0,math.clamp(offset.Z,-size.Z/2,size.Z/2)))
+    if gap>2 then
+        local reached=tweenTo(CFrame.new(spot.X,hrp.Position.Y,spot.Z),CONFIG.TweenSpeed,function() return gameLogic.flags.admin and model.Parent~=nil and root()==hrp and carrying()==false end)
+        if not reached then gameLogic.note("admin","Moving interrupted");return true end
+    end
+    if disposed or not gameLogic.flags.admin or root()~=hrp or not model.Parent then return true end
+    local remotes=RS:FindFirstChild("Remotes")
+    local group=remotes and remotes:FindFirstChild("Treadmill")
+    local join=group and group:FindFirstChild("JoinShared")
+    if not join or not join:IsA("RemoteEvent") then gameLogic.note("admin","Join remote unavailable");gameLogic.next.admin=os.clock()+15;return true end
+    local ok=pcall(join.FireServer,join)
+    gameLogic.note("admin",ok and "Join requested" or "Join failed")
+    return true
+end
+local function treadmillCycle()
+    if gameLogic.adminStep() then return end
+    if not treadmillRequested then return end
+    local hrp = root()
+    if not hrp then publishTreadmill("Waiting for character"); return end
+    if hrp ~= treadmillRoot then
+        treadmillRoot = hrp
+        treadmillArrived = false
+        treadmillArrivedAt = 0
+        treadmillPart = nil
+        treadmillTargetPart = nil
+        nextTreadmillSearch = 0
+    end
+    if os.clock() < recoveryUntil then publishTreadmill("Movement paused"); return end
+    if recoveryUntil > 0 then
+        if not settleAfterDelivery(hrp) then return end
+        recoveryUntil = 0
+    end
+    if isTraining() then
+        if not treadmillArrived then treadmillArrivedAt = os.clock() end
+        treadmillArrived = true
+        if not boostEnabled then publishTreadmill("Training") end
+        return
+    end
+    local state = carrying()
+    if state == nil then publishTreadmill("Waiting for data"); return end
+    if state == true then publishTreadmill("Finish carrying pack first"); return end
+    local part = resolveTreadmill()
+    if not part then
+        treadmillArrived = false
+        treadmillTargetPart = nil
+        publishTreadmill("Finding your treadmill")
+        return
+    end
+    if part ~= treadmillTargetPart then
+        treadmillTargetPart = part
+        treadmillArrived = false
+        treadmillArrivedAt = 0
+    end
+    local target = treadmillDestination(part)
+    local distance = (hrp.Position - target.Position).Magnitude
+    if treadmillArrived and distance > CONFIG.TreadmillExitRadius then
+        treadmillArrived = false
+        treadmillArrivedAt = 0
+    end
+    if not treadmillArrived then
+        if distance > CONFIG.TreadmillArrivalRadius then
+            publishTreadmill("Moving to your treadmill")
+            local reached = tweenTo(target, CONFIG.TweenSpeed, function()
+                if not treadmillRequested or carrying() ~= false then return false, "state_changed" end
+                if isTraining() then return false, "training_started" end
+                if not ownedTreadmillPart(part) or (treadmillDestination(part).Position - target.Position).Magnitude > 2 then
+                    return false, "target_changed"
+                end
+                if (hrp.Position - target.Position).Magnitude <= CONFIG.TreadmillArrivalRadius then return false, "in_range" end
+                return true
+            end)
+            if not reached or not running or not treadmillRequested or root() ~= hrp then return end
+        end
+        if (hrp.Position - target.Position).Magnitude > CONFIG.TreadmillArrivalRadius then return end
+        treadmillArrived = true
+        treadmillArrivedAt = os.clock()
+        log("Owned treadmill destination reached; waiting for native training.")
+    end
+    publishTreadmill("Waiting for training")
+    if os.clock()-treadmillArrivedAt>=3 then
+        treadmillArrived=false
+        local character=player.Character
+        local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+        if humanoid and not isTraining() and treadmillRequested then
+            local away=Vector3.new(hrp.Position.X-part.Position.X,0,hrp.Position.Z-part.Position.Z)
+            if away.Magnitude<1 then away=Vector3.new(0,0,1) end
+            humanoid:MoveTo(part.Position+away.Unit*10)
+            task.wait(.6)
+            if treadmillRequested and root()==hrp and not isTraining() and ownedTreadmillPart(part) then humanoid:MoveTo(part.Position) end
+            task.wait(.6)
+        end
+    end
+end
+local function remote(group,name)
+    local remotes=RS:FindFirstChild("Remotes")
+    local folder=remotes and remotes:FindFirstChild(group)
+    return folder and folder:FindFirstChild(name)
+end
+local function invoke(group,name,...)
+    local item=remote(group,name)
+    if not item or not item:IsA("RemoteFunction") then return false,"Remote unavailable: "..group.."."..name end
+    return pcall(item.InvokeServer,item,...)
+end
+function gameLogic.bindBoost()
+    local event=remote("Treadmill","Boost")
+    if event==gameLogic.boostRemote then return end
+    if gameLogic.boostConnection then gameLogic.boostConnection:Disconnect();gameLogic.boostConnection=nil end
+    gameLogic.boostRemote=event
+    if not event or not event:IsA("RemoteEvent") then return end
+    gameLogic.boostConnection=event.OnClientEvent:Connect(function(id)
+        if disposed or not boostEnabled or not isTraining() or type(id)~="string" or id=="" then return end
+        local stamp=os.clock()
+        if gameLogic.lastBoostId==id and stamp-(gameLogic.lastBoostAt or 0)<3 then return end
+        gameLogic.lastBoostId,gameLogic.lastBoostAt=id,stamp
+        task.delay(.2,function()
+            if disposed or not boostEnabled or not isTraining() or event~=gameLogic.boostRemote then return end
+            if pendingBoost then return end
+            local before={combo=tonumber(player:GetAttribute("TreadmillCombo")) or 0,multiplier=tonumber(player:GetAttribute("TreadmillBoostMultiplier")) or 0,boosted=player:GetAttribute("TreadmillBoosted"),deadline=os.clock()+1.4}
+            local ok=pcall(event.FireServer,event,id)
+            if ok then pendingBoost=before;lastBoostStatus="Event boost requested" end
+        end)
+    end)
+    table.insert(gameLogic.connections,gameLogic.boostConnection)
+end
+local lastExit=0
+local function leaveTraining()
+    if not isTraining() then return true end
+    if os.clock()-lastExit>=1.5 then
+        lastExit=os.clock()
+        local item=remote("Treadmill","ExitRequest")
+        if item and item:IsA("RemoteEvent") then pcall(item.FireServer,item) end
+    end
+    return false
+end
+local function ownedPlot()
+    local plot=gameLogic.ownPlot()
+    return plot and (plot.Name=="PlotModel" and plot or plot:FindFirstChild("PlotModel"))
+end
+local function ownedPack()
+    local function find(container)
+        if not container then return nil end
+        for _,item in ipairs(container:GetChildren()) do
+            if item:IsA("Tool") and item:GetAttribute("CardIsPack")==true and item:GetAttribute("PackId")~=nil then return item end
+        end
+    end
+    return find(player.Character) or find(player:FindFirstChild("Backpack"))
+end
+local nextPlace=0
+local function placeCycle()
+    if not placeRequested or disposed then return false end
+    if carrying()~=false then setStatus(placeStatusLabel,"Waiting for delivery");return false end
+    local pack=ownedPack()
+    if not pack then setStatus(placeStatusLabel,"No owned packs");return false end
+    if os.clock()<nextPlace then return true end
+    local plot=ownedPlot()
+    local ground=plot and (plot:FindFirstChild("AnimeArea") or plot:FindFirstChild("Ground1"))
+    if not ground or not ground:IsA("BasePart") then setStatus(placeStatusLabel,"Own plot not loaded");nextPlace=os.clock()+2;return true end
+    local hrp=root()
+    if not hrp then return true end
+    local size=ground.Size
+    local records=gameLogic.records()
+    if not records then setStatus(placeStatusLabel,"Waiting for inventory");nextPlace=os.clock()+2;return true end
+    local recordSize=1.5
+    for _,record in ipairs(records) do if tostring(record.Id)==tostring(pack:GetAttribute("PackId")) then recordSize=tonumber(record.Size) or 1.5;break end end
+    local radius=2.4*math.max(.5,recordSize)
+    local occupied={}
+    for _,record in ipairs(records) do
+        if gameLogic.placed(record) then table.insert(occupied,{tonumber(record.RelativeX),tonumber(record.RelativeZ),2.4*(tonumber(record.Size) or 1.5)}) end
+    end
+    for i=#gameLogic.pending,1,-1 do local item=gameLogic.pending[i];if item[4]<=os.clock() then table.remove(gameLogic.pending,i) else table.insert(occupied,item) end end
+    for i=#gameLogic.refused,1,-1 do if gameLogic.refused[i][3]<=os.clock() then table.remove(gameLogic.refused,i) end end
+    local bestX,bestZ,bestGap
+    local limitX,limitZ=size.X/2-radius,size.Z/2-radius
+    local step=math.max(2,math.max(size.X,size.Z)/60)
+    for x=-limitX,limitX,step do
+        for z=-limitZ,limitZ,step do
+            local gap=math.huge
+            for _,item in ipairs(occupied) do gap=math.min(gap,math.sqrt((x-item[1])^2+(z-item[2])^2)-radius-item[3]) end
+            for _,item in ipairs(gameLogic.refused) do if (x-item[1])^2+(z-item[2])^2<16 then gap=-1;break end end
+            if gap>=1 and (bestGap==nil or gap<bestGap) then bestX,bestZ,bestGap=x,z,gap end
+        end
+    end
+    if not bestX then setStatus(placeStatusLabel,"Plot full");nextPlace=os.clock()+10;return true end
+    local position=ground.CFrame:PointToWorldSpace(Vector3.new(bestX,size.Y/2,bestZ))
+    setStatus(placeStatusLabel,"Moving to plot")
+    local reached=tweenTo(CFrame.new(position+Vector3.new(0,3,0)),CONFIG.TweenSpeed,function()
+        return placeRequested and not disposed and root()==hrp and ownedPlot()==plot and ground.Parent~=nil and pack.Parent~=nil and carrying()==false
+    end)
+    nextPlace=os.clock()+1
+    if not reached or not running or not placeRequested or disposed or root()~=hrp or ownedPlot()~=plot then return true end
+    local character=player.Character
+    local backpack=player:FindFirstChild("Backpack")
+    local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+    if pack.Parent==backpack and humanoid then humanoid:EquipTool(pack);task.wait(.2) end
+    if not placeRequested or disposed or root()~=hrp or ownedPlot()~=plot or pack.Parent~=character then return true end
+    local id=pack:GetAttribute("PackId")
+    if id==nil then return true end
+    setStatus(placeStatusLabel,"Placing pack")
+    local ok,result=invoke("Packs","PlaceOwned",{Position=position,PackId=id})
+    if not ok or not (result==true or type(result)=="table" and result.Success==true) then
+        if type(result)=="table" and result.Reason=="OVERLAPS_PACK" then table.insert(gameLogic.refused,{bestX,bestZ,os.clock()+120}) end
+        setStatus(placeStatusLabel,"Placement rejected")
+        report("place",result)
+        nextPlace=os.clock()+3
+    else
+        table.insert(gameLogic.pending,{bestX,bestZ,radius,os.clock()+6})
+        setStatus(placeStatusLabel,"Placement confirmed")
+        nextPlace=os.clock()+2
+    end
+    return true
+end
+function gameLogic.request(group,name,...)
+    local ok,result=invoke(group,name,...)
+    if not ok then return false,tostring(result) end
+    if result==true then return true,result end
+    if type(result)=="table" then return result.Success==true,result.Reason or result.Message or result end
+    return false,tostring(result)
+end
+function gameLogic.note(key,message)
+    setStatus(gameLogic.status[key],tostring(message))
+end
+function gameLogic.openStep(atHome)
+    if gameLogic.openNeedsHome and not atHome then return end
+    local records=gameLogic.records()
+    if not records then gameLogic.note("open","Waiting for inventory");return end
+    for _,record in ipairs(records) do
+        if gameLogic.placed(record) and gameLogic.isCharacter(record)==false and (tonumber(record.GrowthEndsAt) or math.huge)<=workspace:GetServerTimeNow()-.3 then
+            local success,reason=gameLogic.request("Packs","OpenOwned",record.Id)
+            if success then gameLogic.note("open","Opened pack");gameLogic.next.equip=0
+            else
+                if reason=="NOT_IN_PLOT" or reason=="TOO_FAR" then gameLogic.openNeedsHome=true;gameLogic.next.openHome=os.clock()+2 end
+                gameLogic.note("open",type(reason)=="table" and "Request rejected" or reason)
+            end
+            return
+        end
+    end
+    gameLogic.openNeedsHome=false
+    gameLogic.note("open","No grown packs")
+end
+function gameLogic.openHomeCycle()
+    if not gameLogic.flags.open or not gameLogic.openNeedsHome or os.clock()<(gameLogic.next.openHome or 0) or carrying()~=false then return false end
+    local plot=ownedPlot()
+    local area=plot and (plot:FindFirstChild("AnimeArea") or plot:FindFirstChild("Ground1"))
+    local hrp=root()
+    gameLogic.next.openHome=os.clock()+5
+    if not hrp or not area or not area:IsA("BasePart") then gameLogic.note("open","Waiting for own plot");return true end
+    local pos=area.CFrame:PointToWorldSpace(Vector3.new(0,area.Size.Y/2+3,0))
+    local offset=area.CFrame:PointToObjectSpace(hrp.Position)
+    if math.abs(offset.X)>area.Size.X/2 or math.abs(offset.Z)>area.Size.Z/2 then
+        local reached=tweenTo(CFrame.new(pos),CONFIG.TweenSpeed,function() return gameLogic.flags.open and root()==hrp and carrying()==false and ownedPlot()==plot end)
+        if not reached then return true end
+    end
+    if gameLogic.flags.open and not disposed then gameLogic.openStep(true) end
+    return true
+end
+function gameLogic.price(module,method,...)
+    local cfg=gameLogic.module(module)
+    if not cfg or type(cfg[method])~="function" then return nil end
+    local ok,value=pcall(cfg[method],...)
+    if ok then return tonumber(value) end
+end
+function gameLogic.upgradeStep(key)
+    local cash=gameLogic.num("Cash")
+    if cash==nil then return "Waiting for cash data" end
+    local price,group,action,arg
+    if key=="tread" then
+        local level=gameLogic.data("TreadmillLevel")
+        if level==nil then return "Waiting for treadmill data" end
+        price=gameLogic.price("TreadmillConfig","GetPriceForNextLevel",tonumber(tostring(level):match("%d+"))) or gameLogic.price("TreadmillConfig","GetPriceForNextLevel",level)
+        group,action,arg="Treadmill","Upgrade",{}
+    elseif key=="base" then
+        local level=gameLogic.num("BaseUpgradeLevel");if level==nil then return "Waiting for base data" end
+        price=gameLogic.price("BaseUpgradeConfig","GetPriceForNextLevel",level)
+        group,action,arg="BaseUpgrade","Purchase",{}
+    elseif key=="luck" then
+        local level=gameLogic.num("HatchLuckLevel");if level==nil then return "Waiting for luck data" end
+        price=gameLogic.price("LuckMachineConfig","GetPrice",level)
+        group,action,arg="LuckMachine","Upgrade","Max"
+    end
+    if not price or price<0 then return "Price unavailable or max level" end
+    if cash<price then return "Waiting for cash" end
+    local ok,reason=gameLogic.request(group,action,arg)
+    return ok and "Upgrade confirmed" or (type(reason)=="string" and reason or "Upgrade rejected")
+end
+function gameLogic.auraStep()
+    local cfg=gameLogic.module("AurasConfig")
+    local data=gameLogic.data("Auras")
+    local cash=gameLogic.num("Cash")
+    if not cfg or type(cfg.Ordered)~="table" or type(data)~="table" or type(data.Owned)~="table" or cash==nil then return "Waiting for aura data" end
+    local best,buy,bestMult,buyMult=nil,nil,0,0
+    for _,aura in pairs(cfg.Ordered) do
+        if type(aura)=="table" and type(aura.Id)=="string" then
+            local mult=tonumber(aura.SpeedMultiplier) or 0
+            local price=tonumber(aura.CashPrice or aura.Price or aura.Cost)
+            if data.Owned[aura.Id]==true then
+                if mult>bestMult then best,bestMult=aura.Id,mult end
+            elseif not aura.DungeonOnly and price and price>=0 and price<=cash and mult>buyMult then buy,buyMult=aura.Id,mult end
+        end
+    end
+    if gameLogic.flags.buyAura and buy and buyMult>bestMult then local ok=gameLogic.request("Auras","Purchase",buy);return ok and "Purchased "..buy or "Purchase rejected" end
+    if gameLogic.flags.equipAura and best and data.Equipped~=best then local ok=gameLogic.request("Auras","Equip",best);return ok and "Equipped "..best or "Equip rejected" end
+    return "No better aura available"
+end
+function gameLogic.coachStep()
+    local cfg=gameLogic.module("CoachConfig")
+    local util=gameLogic.module("CoachUtil","Utilities")
+    local data=gameLogic.data("Coaches")
+    local cash=gameLogic.num("Cash")
+    if not cfg or type(cfg.Coaches)~="table" or not util or type(data)~="table" or type(data.Owned)~="table" or cash==nil then return "Waiting for coach data" end
+    local best,buy,bestBoost,buyBoost=nil,nil,-1,-1
+    local windowOk,window=pcall(util.GetWindow,workspace:GetServerTimeNow())
+    for _,coach in pairs(cfg.Coaches) do
+        if type(coach)=="table" and type(coach.Id)=="string" then
+            local owned=data.Owned[coach.Id]
+            local boost=tonumber(coach.Boost) or 0
+            if owned==true or (tonumber(owned) or 0)>0 then if boost>bestBoost then best,bestBoost=coach.Id,boost end end
+            if not coach.Limited and not coach.Featured and windowOk and type(util.GetRemaining)=="function" then
+                local price=tonumber(coach.Price)
+                local ok,left=pcall(util.GetRemaining,data,coach,window)
+                if ok and (tonumber(left) or 0)>0 and price and price>=0 and price<=cash and boost>buyBoost then buy,buyBoost=coach.Id,boost end
+            end
+        end
+    end
+    if gameLogic.flags.buyCoach and buy and buyBoost>bestBoost then local ok=gameLogic.request("Coaches","Purchase",buy);return ok and "Purchased "..buy or "Purchase rejected" end
+    if gameLogic.flags.equipCoach and best and data.Equipped~=best then local ok=gameLogic.request("Coaches","Equip",best);return ok and "Equipped "..best or "Equip rejected" end
+    return "No better coach available"
+end
+function gameLogic.rebirthStep()
+    local cfg=gameLogic.module("RebirthConfig")
+    local count=gameLogic.num("Rebirths")
+    local speed=gameLogic.num("Speed")
+    if not cfg or type(cfg.Requirement)~="table" or count==nil or speed==nil then return "Waiting for rebirth data" end
+    local required=(tonumber(cfg.Requirement.Base) or 2000000)*(tonumber(cfg.Requirement.Growth) or 6)^count
+    if speed<required then return "Waiting for speed" end
+    if running or carrying()~=false then return "Waiting for idle movement" end
+    if not leaveTraining() then return "Leaving treadmill" end
+    local ok=gameLogic.request("Rebirth","Request")
+    return ok and "Rebirth confirmed" or "Rebirth rejected"
+end
+function gameLogic.restoreGraphics()
+    gameLogic.flags.graphics=false
+    gameLogic.graphicsGeneration=(gameLogic.graphicsGeneration or 0)+1
+    for instance,properties in pairs(gameLogic.saved) do for property,value in pairs(properties) do pcall(function() instance[property]=value end) end end
+    table.clear(gameLogic.saved)
+    if gameLogic.graphicsConnection then gameLogic.graphicsConnection:Disconnect();gameLogic.graphicsConnection=nil end
+end
+function gameLogic.graphics(enabled)
+    gameLogic.restoreGraphics()
+    if not enabled then return end
+    gameLogic.flags.graphics=true
+    local generation=gameLogic.graphicsGeneration
+    local function change(instance,property,value)
+        local ok,old=pcall(function() return instance[property] end)
+        if not ok then return end
+        local saved=gameLogic.saved[instance] or {};gameLogic.saved[instance]=saved
+        if saved[property]==nil then saved[property]=old end
+        pcall(function() instance[property]=value end)
+    end
+    local function thin(instance)
+        if disposed or not gameLogic.flags.graphics or generation~=gameLogic.graphicsGeneration then return end
+        if instance:IsA("ParticleEmitter") or instance:IsA("Trail") or instance:IsA("Beam") or instance:IsA("Smoke") or instance:IsA("Fire") or instance:IsA("Sparkles") then change(instance,"Enabled",false)
+        elseif instance:IsA("BasePart") then change(instance,"CastShadow",false) end
+    end
+    gameLogic.graphicsConnection=workspace.DescendantAdded:Connect(thin)
+    change(game:GetService("Lighting"),"GlobalShadows",false)
+    task.spawn(function() for i,instance in ipairs(workspace:GetDescendants()) do if disposed or not gameLogic.flags.graphics or generation~=gameLogic.graphicsGeneration then break end;thin(instance);if i%500==0 then task.wait() end end end)
+end
+
+local AgonyUI = (function()
+local Library = {}
+function Library.Create(options)
+options = options or {}
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local Run = game:GetService("RunService")
+local Tween = game:GetService("TweenService")
+local Stats = game:GetService("Stats")
+local player = Players.LocalPlayer
+assert(player, "Agony UI must run on the client")
+local pg = player:WaitForChild("PlayerGui")
+local rootName = options.Id or "AgonyHubUI"
+local function isOldStandalone(gui)
+    return gui:IsA("ScreenGui") and (
+        gui:GetAttribute("AgonyStandaloneUI") == true
+        or gui.Name == rootName
+        or gui.Name == rootName .. "Floating"
+        or gui.Name == "AgonyHubUI"
+        or gui.Name == "AgonyHubUIFloating"
+    )
+end
+for _, gui in ipairs(pg:GetChildren()) do
+    if isOldStandalone(gui) then gui:Destroy() end
+end
+local screen
+local alive = true
+local conns = {}
+local Hub = {}
+local identityHidden = options.HideUsername ~= false
+local welcomeLabels = {}
+local function on(signal, handler)
+local c = signal:Connect(function(...)
+    if alive and screen and screen.Parent == pg then
+        handler(...)
+    end
+end)
+table.insert(conns, c)
+return c
+end
+local pageOrders = {}
+local function ui(class, parent, props)
+local x = Instance.new(class)
+for k, v in pairs(props or {}) do
+x[k] = v
+end
+if parent and pageOrders[parent] and x:IsA("GuiObject") then
+    pageOrders[parent] = pageOrders[parent] + 1
+    x.LayoutOrder = pageOrders[parent]
+end
+x.Parent = parent
+return x
+end
+local function rounded(x, r)
+ui("UICorner", x, {
+CornerRadius = UDim.new(0, r or 8)
+})
+return x
+end
+local C = {
+    bg = Color3.fromRGB(15, 12, 17),
+    side = Color3.fromRGB(25, 17, 23),
+    card = Color3.fromRGB(34, 24, 31),
+    selected = Color3.fromRGB(86, 25, 40),
+    blue = Color3.fromRGB(255, 72, 91),
+    white = Color3.fromRGB(255, 241, 245),
+    muted = Color3.fromRGB(168, 144, 155),
+    red = Color3.fromRGB(255, 53, 78),
+    green = Color3.fromRGB(79, 221, 161),
+    amber = Color3.fromRGB(255, 172, 93),
+    line = Color3.fromRGB(78, 39, 49),
+    deep = Color3.fromRGB(19, 14, 21)
+}
+local function stroke(parent, color, transparency, thickness)
+    return ui("UIStroke", parent, {Color = color or C.line,
+        Transparency = transparency or 0, Thickness = thickness or 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border})
+end
+local function gradient(parent, first, last, rotation)
+    return ui("UIGradient", parent, {Color = ColorSequence.new(first,last), Rotation = rotation or 0})
+end
+local function animate(instance, properties, duration)
+    Tween:Create(instance, TweenInfo.new(duration or 0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), properties):Play()
+end
+local function label(parent, str, size, pos, font)
+return ui("TextLabel", parent, {
+Text = str,
+Size = size,
+Position = pos or UDim2.new(),
+BackgroundTransparency = 1,
+TextColor3 = C.white,
+Font = Enum.Font.GothamBold,
+TextSize = font or 12,
+TextXAlignment = Enum.TextXAlignment.Left
+})
+end
+local function imageURI(value)
+    if type(value)=="number" then
+        if value>0 then return "rbxassetid://"..string.format("%.0f",value) end
+    elseif type(value)=="string" then
+        if value:match("^%d+$") and tonumber(value)>0 then return "rbxassetid://"..value end
+        if value:match("^rbxassetid://%d+$") then return value end
+        if value:match("^rbxasset://") then return value end
+    end
+    return nil
+end
+local imageRequests = setmetatable({}, {__mode="k"})
+local ContentProvider = game:GetService("ContentProvider")
+local function displayImage(image, fallback, uri, alternate, trustedLocal)
+    if not uri then return end
+    local request = (imageRequests[image] or 0) + 1
+    imageRequests[image] = request
+    local function valid()
+        return alive and image.Parent and fallback.Parent and imageRequests[image] == request
+    end
+    if trustedLocal then
+        local ok=pcall(function() image.Image=uri end)
+        if ok then fallback.Visible=false; image.ImageTransparency=0 end
+        return
+    end
+    local candidates={uri}
+    if alternate and alternate~=uri then table.insert(candidates,alternate) end
+    fallback.Visible=false
+    image.ImageTransparency=0
+    task.spawn(function()
+        for _,candidate in ipairs(candidates) do
+            if not valid() then return end
+            local ok=pcall(function() image.Image=candidate end)
+            if ok then
+                local loaded=false
+                task.spawn(function()
+                    pcall(function()
+                        ContentProvider:PreloadAsync({candidate},function(_,status)
+                            if status==Enum.AssetFetchStatus.Success then loaded=true end
+                        end)
+                    end)
+                end)
+                local untilTime=os.clock()+5
+                repeat
+                    if not valid() then return end
+                    if image.Image==candidate and (image.IsLoaded or loaded) then
+                        fallback.Visible=false; image.ImageTransparency=0; return
+                    end
+                    task.wait(0.1)
+                until os.clock()>=untilTime
+            end
+        end
+        if valid() then
+            fallback.Visible=true; image.ImageTransparency=1
+            on(image:GetPropertyChangedSignal("IsLoaded"),function()
+                if valid() and image.IsLoaded then
+                    fallback.Visible=false; image.ImageTransparency=0
+                end
+            end)
+            if image.IsLoaded then fallback.Visible=false; image.ImageTransparency=0 end
+            warn("[AGONY UI] Image not confirmed loaded:",uri)
+        end
+    end)
+end
+local function addIcon(parent, fallback, value, size, pos, tint, thumbnailFallback)
+    local uri=imageURI(value)
+    if not uri then return nil end
+    local image=ui("ImageLabel",parent,{Size=size,Position=pos,BackgroundTransparency=1,Image="",ScaleType=Enum.ScaleType.Fit,ImageColor3=tint or Color3.new(1,1,1)})
+    local id=uri:match("^rbxassetid://(%d+)$")
+    local alternate=thumbnailFallback and id and ("rbxthumb://type=Asset&id="..id.."&w=150&h=150") or nil
+    displayImage(image,fallback,uri,alternate)
+    return image
+end
+local function button(parent, str, size, pos)
+return rounded(ui("TextButton", parent, {
+Text = str,
+Size = size,
+Position = pos or UDim2.new(),
+BackgroundColor3 = C.card,
+BorderSizePixel = 0,
+TextColor3 = C.white,
+Font = Enum.Font.GothamMedium,
+TextSize = 12,
+AutoButtonColor = false
+}), 8)
+end
+screen = ui("ScreenGui", nil, {
+Name = rootName,
+ResetOnSpawn = false,
+IgnoreGuiInset = true,
+DisplayOrder = 2147483646,
+ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+})
+screen:SetAttribute("AgonyStandaloneUI", true)
+local function dispose(rootAlreadyDestroying)
+    if not alive then return end
+    alive = false
+    for _, connection in ipairs(conns) do
+        pcall(function() connection:Disconnect() end)
+    end
+    table.clear(conns)
+    if not rootAlreadyDestroying then screen:Destroy() end
+end
+table.insert(conns, screen.Destroying:Connect(function() dispose(true) end))
+table.insert(conns, screen.AncestryChanged:Connect(function()
+    if screen.Parent ~= pg then dispose(false) end
+end))
+screen.Parent = pg
+local loading = rounded(ui("Frame", screen, {
+Size = UDim2.fromOffset(350, 190),
+AnchorPoint = Vector2.new(0.5, 0.5),
+Position = UDim2.fromScale(0.5, 0.5),
+BackgroundColor3 = C.bg,
+BorderSizePixel = 0,
+ZIndex = 90
+}), 14)
+ui("UIStroke", loading, {
+Color = C.blue,
+Thickness = 1.4
+})
+loading.Visible = true
+local loadingScale = ui("UIScale", loading, {
+Scale = 1
+})
+local logoLoading = rounded(ui(
+"ImageLabel",
+loading,
+{
+Size = UDim2.fromOffset(54, 54),
+Position = UDim2.fromOffset(18, 20),
+BackgroundColor3 = C.side,
+Image = "",
+ScaleType = Enum.ScaleType.Fit,
+ZIndex = 92
+}
+), 10)
+gradient(loading, Color3.fromRGB(51,22,32), C.bg, 35)
+loading.BackgroundColor3 = Color3.new(1,1,1)
+local fallbackLoading = label(
+logoLoading,
+"AG",
+UDim2.fromScale(1, 1),
+nil,
+18
+)
+fallbackLoading.TextXAlignment =
+Enum.TextXAlignment.Center
+fallbackLoading.TextYAlignment =
+Enum.TextYAlignment.Center
+local loadTitle = label(
+loading,
+"AGONY HUB",
+UDim2.fromOffset(260, 38),
+UDim2.fromOffset(86, 23),
+25
+)
+loadTitle.TextColor3 = C.red
+loadTitle.TextStrokeColor3 = C.red
+loadTitle.TextStrokeTransparency = 0.2
+local loadGlow = ui("UIStroke", loadTitle, {
+Color = C.red,
+Thickness = 1.6,
+Transparency = 0.2
+})
+local loadCredit = label(
+loading,
+"by mrpopsicle12",
+UDim2.fromOffset(240, 20),
+UDim2.fromOffset(88, 62),
+12
+)
+loadCredit.TextColor3 = C.muted
+local barTrack = rounded(ui("Frame", loading, {
+Size = UDim2.new(1, -36, 0, 8),
+Position = UDim2.fromOffset(18, 122),
+BackgroundColor3 = C.card,
+BorderSizePixel = 0
+}), 6)
+local barFill = rounded(ui("Frame", barTrack, {
+Size = UDim2.fromScale(0, 1),
+BackgroundColor3 = C.blue,
+BorderSizePixel = 0
+}), 6)
+local barLabel = label(
+loading,
+"Loading... 0%",
+UDim2.new(1, -36, 0, 22),
+UDim2.fromOffset(18, 143),
+12
+)
+barLabel.TextXAlignment =
+Enum.TextXAlignment.Center
+barLabel.TextColor3 = C.muted
+local window = rounded(ui("Frame", screen, {
+Size = UDim2.fromOffset(748, 510),
+AnchorPoint = Vector2.new(0.5, 0.5),
+Position = UDim2.fromScale(0.5, 0.5),
+BackgroundColor3 = C.deep,
+BorderSizePixel = 0,
+Visible = false,
+ClipsDescendants = true
+}), 12)
+local shellStroke = stroke(window, C.red, 0.28, 1.5)
+local scale = ui("UIScale", window, {
+Scale = 1
+})
+local function resize()
+local cam = workspace.CurrentCamera
+if not cam then
+return
+end
+local v = cam.ViewportSize
+local ok, resolution = pcall(function()
+    return game:GetService("GuiService"):GetScreenResolution()
+end)
+if ok and typeof(resolution) == "Vector2"
+    and resolution.X >= v.X * 1.15 and resolution.Y >= v.Y * 1.15 then
+    v = resolution
+end
+local preferredScale = math.min((v.X - 14) / 748, (v.Y - 14) / 510)
+scale.Scale = math.clamp(preferredScale, 0.1, 1)
+if loading.Parent then
+loadingScale.Scale = math.clamp(
+math.min(
+(v.X - 20) / 350,
+(v.Y - 20) / 190
+),
+0.45,
+1
+)
+end
+end
+resize()
+local side = rounded(ui("Frame", window, {
+Size = UDim2.new(0, 170, 1, -4),
+Position = UDim2.fromOffset(2, 2),
+BackgroundColor3 = C.side,
+BorderSizePixel = 0
+}), 10)
+local sideLogo = rounded(ui(
+"ImageLabel",
+side,
+{
+Size = UDim2.fromOffset(43, 43),
+Position = UDim2.fromOffset(12, 14),
+BackgroundColor3 = C.card,
+Image = "",
+ScaleType = Enum.ScaleType.Fit
+}
+), 8)
+local fallbackSide = label(
+sideLogo,
+"AG",
+UDim2.fromScale(1, 1),
+nil,
+14
+)
+fallbackSide.TextXAlignment =
+Enum.TextXAlignment.Center
+fallbackSide.TextYAlignment =
+Enum.TextYAlignment.Center
+local title = label(
+side,
+"AGONY HUB",
+UDim2.new(1,-70,0,25),
+UDim2.fromOffset(63, 13),
+16
+)
+title.TextColor3 = C.red
+title.TextStrokeColor3 = C.red
+title.TextStrokeTransparency = 0.25
+local titleGlow = ui("UIStroke", title, {
+Color = C.red,
+Thickness = 1.2,
+Transparency = 0.15
+})
+local version = label(
+side,
+tostring(options.Version or ""),
+UDim2.new(1,-68,0,16),
+UDim2.fromOffset(63, 36),
+10
+)
+version.TextColor3 = C.blue
+version.TextScaled=true
+ui("UITextSizeConstraint",version,{MinTextSize=7,MaxTextSize=10})
+version.Visible = version.Text ~= ""
+if not version.Visible then title.Position=UDim2.fromOffset(63,23) end
+stroke(sideLogo, C.red, 0.2)
+local navCaption = label(side, "  NAVIGATION", UDim2.fromOffset(164, 20), UDim2.fromOffset(12, 65), 10)
+navCaption.TextColor3 = C.muted
+local tabs, tabDecor = {}, {}
+local names = options.Tabs or {"Main", "Settings"}
+assert(#names > 0, "At least one tab is required")
+local desc = options.Descriptions or {}
+do
+local tabScroll = ui("ScrollingFrame", side, {
+Name = "AgonyTabScroll",
+Active = true,
+ScrollingEnabled = true,
+Size = UDim2.new(1, -6, 1, -102),
+Position = UDim2.fromOffset(3, 90),
+BackgroundTransparency = 1,
+BorderSizePixel = 0,
+ScrollBarThickness = 0,
+ScrollingDirection = Enum.ScrollingDirection.Y,
+CanvasSize = UDim2.fromOffset(0, 0)
+})
+ui("UIPadding",tabScroll,{PaddingLeft=UDim.new(0,4),PaddingRight=UDim.new(0,4),PaddingTop=UDim.new(0,4),PaddingBottom=UDim.new(0,4)})
+local tabLayout = ui("UIListLayout", tabScroll, {
+SortOrder = Enum.SortOrder.LayoutOrder,
+Padding = UDim.new(0, 4)
+})
+local function refreshTabCanvas()
+    local height=tabLayout.AbsoluteContentSize.Y+8
+    tabScroll.CanvasSize=UDim2.fromOffset(0,height)
+    tabScroll.ScrollBarThickness=height>tabScroll.AbsoluteSize.Y and 3 or 0
+end
+on(tabLayout:GetPropertyChangedSignal("AbsoluteContentSize"),refreshTabCanvas)
+on(tabScroll:GetPropertyChangedSignal("AbsoluteSize"),refreshTabCanvas)
+for i, name in ipairs(names) do
+assert(type(name) == "string" and not tabs[name], "Tab names must be unique strings")
+local b = button(tabScroll, "", UDim2.new(1, -2, 0, 42))
+b.LayoutOrder = i
+local symbols={Home="⌂",Settings="⚙",Main="▦",Farm="◆",Egg="◇",Boss="✦",Trade="⇄",Event="★",Island="⌖"}
+local index = label(b, symbols[name] or string.format("%02d", i), UDim2.fromOffset(34,42), UDim2.fromOffset(7,0), 25)
+index.TextXAlignment=Enum.TextXAlignment.Center
+index.TextColor3 = C.muted
+local tabIcon=addIcon(b,index, (options.TabIcons or {})[name],UDim2.fromOffset(30,30),UDim2.fromOffset(9,6),C.muted)
+local text = label(b, name, UDim2.new(1,-65,1,0), UDim2.fromOffset(48,0), 13)
+text.TextTruncate = Enum.TextTruncate.AtEnd
+local rail = rounded(ui("Frame",b,{Size=UDim2.fromOffset(3,28),Position=UDim2.fromOffset(0,7),BackgroundColor3=C.red,BorderSizePixel=0,Visible=false}),2)
+local arrow = label(b, ">", UDim2.fromOffset(13,42), UDim2.new(1,-17,0,0),12)
+arrow.TextColor3 = C.muted
+local outline = stroke(b,C.line,0.65)
+tabs[name] = b
+tabDecor[name] = {rail=rail,index=index,arrow=arrow,outline=outline,text=text,icon=tabIcon}
+on(b.MouseEnter,function() if not rail.Visible then animate(b,{BackgroundColor3=C.selected:Lerp(C.card,0.55)}) end end)
+on(b.MouseLeave,function() if not rail.Visible then animate(b,{BackgroundColor3=C.card}) end end)
+end
+refreshTabCanvas()
+end
+local profile = rounded(ui("Frame", window, {
+    Size=UDim2.new(0.5,-4,1,0), BackgroundColor3=C.card,
+    BorderSizePixel=0, Visible=false
+}),10)
+stroke(profile,C.line,0.15)
+local profileTitle=label(profile,"PLAYER PROFILE",UDim2.new(1,-90,0,20),UDim2.fromOffset(12,9),13)
+profileTitle.TextColor3=C.red
+local avatar=rounded(ui("ImageLabel",profile,{
+    Size=UDim2.fromOffset(76,76),Position=UDim2.fromOffset(12,42),BackgroundTransparency=1
+}),12)
+local username=label(profile,"********",UDim2.new(1,-112,0,28),UDim2.fromOffset(100,48),17)
+username.TextTruncate=Enum.TextTruncate.AtEnd
+local profileCaption=label(profile,"PRIVATE MODE",UDim2.new(1,-112,0,22),UDim2.fromOffset(100,77),11)
+profileCaption.TextColor3=C.red
+local privacyButton=button(profile,"SHOW",UDim2.fromOffset(65,28),UDim2.new(1,-77,0,7))
+privacyButton.TextSize=11
+privacyButton.BackgroundColor3=C.selected
+stroke(privacyButton,C.red,0.45)
+local privacyHint=label(profile,"Username privacy  /  SHOW or HIDE",UDim2.new(1,-24,0,18),UDim2.fromOffset(12,139),11)
+privacyHint.TextColor3=C.muted
+local function refreshPrivacy()
+    username.Text = identityHidden and "********" or ("@" .. player.Name)
+    avatar.Visible = true
+    privacyButton.Text = identityHidden and "SHOW" or "HIDE"
+    profileCaption.Text = identityHidden and "PRIVATE MODE" or "LOCAL PLAYER"
+    for _, welcome in ipairs(welcomeLabels) do
+        welcome.Text = "Welcome, " .. (identityHidden and "********" or player.DisplayName)
+    end
+end
+function Hub:SetPrivacy(value)
+    identityHidden = value == true
+    refreshPrivacy()
+end
+on(privacyButton.Activated,function() Hub:SetPrivacy(not identityHidden) end)
+refreshPrivacy()
+local credits=rounded(ui("Frame",window,{
+    Size=UDim2.new(0.5,-4,1,0),Position=UDim2.new(0.5,4,0,0),
+    BackgroundColor3=C.card,BorderSizePixel=0,Visible=false
+}),10)
+stroke(credits,C.line,0.2)
+local creditsHeading=label(credits,"CREDITS / COMMUNITY",UDim2.new(1,-24,0,20),UDim2.fromOffset(12,9),13)
+creditsHeading.TextColor3=C.red
+local developerLabel=label(credits,"Developed by "..tostring(options.Developer or "mrpopsicle12"),UDim2.new(1,-24,0,17),UDim2.fromOffset(12,139),11)
+developerLabel.TextTruncate=Enum.TextTruncate.AtEnd
+local linkOverlay=ui("Frame",window,{Size=UDim2.fromScale(1,1),BackgroundColor3=C.bg,BackgroundTransparency=0.2,BorderSizePixel=0,Visible=false,ZIndex=50,Active=true})
+rounded(linkOverlay,12)
+local linkPanel=rounded(ui("Frame",linkOverlay,{Size=UDim2.fromOffset(400,174),AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),BackgroundColor3=C.card,BorderSizePixel=0,ZIndex=51}),12)
+stroke(linkPanel,C.red,0.15)
+local linkHeading=label(linkPanel,"COMMUNITY",UDim2.new(1,-60,0,28),UDim2.fromOffset(16,10),17)
+linkHeading.ZIndex=52
+local linkClose=button(linkPanel,"X",UDim2.fromOffset(26,26),UDim2.new(1,-38,0,10))
+linkClose.ZIndex=52
+local linkHelp=label(linkPanel,"",UDim2.new(1,-32,0,38),UDim2.fromOffset(16,44),11)
+linkHelp.TextWrapped=true
+linkHelp.TextColor3=C.muted
+linkHelp.ZIndex=52
+local linkBox=rounded(ui("TextBox",linkPanel,{Size=UDim2.new(1,-32,0,32),Position=UDim2.fromOffset(16,87),BackgroundColor3=C.deep,BorderSizePixel=0,TextColor3=C.white,Font=Enum.Font.Gotham,TextSize=12,ClearTextOnFocus=false,TextEditable=false,Text="",ZIndex=52}),7)
+local copyButton=button(linkPanel,"COPY LINK",UDim2.new(1,-32,0,32),UDim2.fromOffset(16,130))
+copyButton.BackgroundColor3=C.selected
+copyButton.ZIndex=52
+local currentLink=""
+local function closeLink()
+    linkBox:ReleaseFocus()
+    linkOverlay.Visible=false
+end
+on(linkClose.Activated,closeLink)
+on(window:GetPropertyChangedSignal("Visible"),function() if not window.Visible then closeLink() end end)
+local function showLink(name,url)
+    currentLink=type(url)=="string" and url or ""
+    local valid=currentLink:match("^https://%S+$")~=nil
+    if not valid then currentLink="" end
+    linkHeading.Text=name
+    linkHelp.Text=valid and "Copy the link to join or follow our community." or "Community link not configured yet."
+    linkBox.TextEditable=false
+    linkBox.Text=currentLink
+    linkBox.Visible=valid
+    copyButton.Visible=valid
+    copyButton.Text="COPY LINK"
+    linkOverlay.Visible=true
+end
+on(copyButton.Activated,function()
+    if currentLink=="" then return end
+    if type(setclipboard)=="function" then
+        local ok=pcall(setclipboard,currentLink)
+        if ok then copyButton.Text="COPIED";linkHelp.Text="Link copied. Paste it into your browser or app.";return end
+    end
+    linkBox.TextEditable=true
+    linkBox:CaptureFocus()
+    linkBox.CursorPosition=#currentLink+1
+    linkBox.SelectionStart=1
+    linkHelp.Text="Copy the selected link, then open it in your browser or app."
+end)
+on(linkBox.FocusLost,function() linkBox.Text=currentLink;linkBox.TextEditable=false end)
+local brandGlyphs = {
+    Attribution = "Font Awesome Free 6.7.2, Copyright 2024 Fonticons, Inc.; CC BY 4.0 https://creativecommons.org/licenses/by/4.0/; source https://fontawesome.com/; Discord and TikTok icons rasterized, alpha quantized, runs merged.",
+    Discord = {
+        {7,4,1,1,1},{8,4,1,1,2},{9,4,1,1,3},{10,4,1,1,2},{17,4,1,1,2},{18,4,1,1,3},{19,4,1,1,2},{20,4,1,1,1},
+        {5,5,1,1,1},{6,5,1,1,3},{7,5,4,1,4},{11,5,2,1,2},{13,5,2,1,3},{15,5,2,1,2},{17,5,4,1,4},{21,5,1,1,3},
+        {22,5,1,1,1},{4,6,1,1,1},{5,6,18,1,4},{23,6,1,1,1},{4,7,20,2,4},{3,8,1,1,2},{24,8,1,1,2},{3,9,22,3,4},
+        {2,10,1,1,2},{25,10,1,1,2},{2,11,1,1,3},{25,11,1,1,3},{2,12,6,1,4},{8,12,1,1,3},{9,12,2,1,2},{11,12,6,1,4},
+        {17,12,2,1,2},{19,12,1,1,3},{20,12,6,1,4},{1,13,1,1,1},{2,13,5,4,4},{7,13,1,1,3},{11,13,1,1,2},{12,13,4,4,4},
+        {16,13,1,1,2},{20,13,1,1,3},{21,13,5,4,4},{26,13,1,1,1},{1,14,1,1,2},{7,14,1,2,2},{20,14,1,2,2},{26,14,1,1,2},
+        {1,15,1,5,3},{26,15,1,5,3},{7,16,1,1,3},{11,16,1,1,2},{16,16,1,1,2},{20,16,1,1,3},{2,17,6,1,4},{8,17,1,1,3},
+        {9,17,2,1,2},{11,17,6,1,4},{17,17,2,1,2},{19,17,1,1,3},{20,17,6,1,4},{2,18,24,2,4},{1,20,1,1,2},{2,20,5,1,4},
+        {7,20,2,1,2},{9,20,1,1,3},{10,20,8,1,4},{18,20,1,1,3},{19,20,2,1,2},{21,20,5,1,4},{26,20,1,1,2},{2,21,1,1,2},
+        {3,21,5,1,4},{8,21,1,2,3},{10,21,2,1,1},{12,21,4,1,2},{16,21,2,1,1},{19,21,1,2,3},{20,21,5,1,4},{25,21,1,1,2},
+        {4,22,1,1,2},{5,22,3,1,4},{20,22,3,1,4},{23,22,1,1,2},{6,23,1,1,2},{7,23,1,1,3},{20,23,1,1,3},{21,23,1,1,2}
+    },
+    TikTok = {
+        {14,0,1,20,1},{15,0,4,2,4},{19,0,1,1,2},{19,1,1,1,3},{15,2,5,2,4},{20,3,1,1,2},{15,4,6,1,4},{21,4,1,1,1},
+        {15,5,7,1,4},{22,5,1,1,2},{15,6,8,1,4},{23,6,1,1,3},{24,6,1,1,2},{25,6,1,1,1},{15,7,11,2,4},{26,7,1,4,1},
+        {15,9,4,12,4},{19,9,2,1,3},{21,9,5,1,4},{7,10,1,1,1},{8,10,1,1,2},{9,10,2,1,3},{11,10,1,1,2},{19,10,1,11,2},
+        {21,10,1,1,2},{22,10,1,1,3},{23,10,3,1,4},{5,11,1,1,1},{6,11,1,1,3},{7,11,5,1,4},{23,11,2,1,1},{25,11,1,1,2},
+        {4,12,1,1,1},{5,12,6,1,4},{11,12,1,3,3},{3,13,1,1,1},{4,13,7,1,4},{3,14,8,1,4},{2,15,1,1,2},{3,15,5,1,4},
+        {8,15,1,1,3},{9,15,1,1,1},{2,16,1,1,3},{3,16,4,1,4},{7,16,1,1,2},{1,17,1,4,1},{2,17,4,4,4},{6,17,1,1,3},
+        {6,18,1,2,2},{6,20,1,1,3},{14,20,1,1,2},{2,21,5,1,4},{7,21,1,1,2},{13,21,1,1,1},{14,21,5,1,4},{19,21,1,1,1},
+        {2,22,1,1,2},{3,22,5,1,4},{8,22,1,1,2},{12,22,1,1,1},{13,22,1,1,3},{14,22,4,1,4},{18,22,1,1,3},{2,23,1,1,1},
+        {3,23,7,1,4},{10,23,2,1,3},{12,23,6,1,4},{18,23,1,1,1},{3,24,1,1,2},{4,24,13,1,4},{17,24,1,1,3},{4,25,1,1,2},
+        {5,25,11,1,4},{16,25,1,1,3},{5,26,1,1,1},{6,26,1,1,3},{7,26,8,1,4},{15,26,1,1,2},{7,27,1,1,2},{8,27,1,1,3},
+        {9,27,3,1,4},{12,27,1,1,3},{13,27,1,1,2},{14,27,1,1,1}
+    },
+}
+local function embeddedBrandIcon(parent,name)
+    local glyph=ui("Frame",parent,{
+        Size=UDim2.new(1,-6,1,-6),Position=UDim2.fromOffset(3,3),
+        BackgroundTransparency=1,BorderSizePixel=0,ClipsDescendants=true
+    })
+    for _,r in ipairs(brandGlyphs[name] or {}) do
+        ui("Frame",glyph,{
+            Position=UDim2.fromScale(r[1]/28,r[2]/28),
+            Size=UDim2.fromScale(r[3]/28,r[4]/28),
+            BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1-r[5]/4,
+            BorderSizePixel=0,Active=false
+        })
+    end
+    return glyph
+end
+local function communityButton(name,caption,url,y,accent,monogram)
+    local b=button(credits,"",UDim2.new(1,-24,0,44),UDim2.fromOffset(12,y))
+    b.BackgroundColor3=C.deep
+    stroke(b,C.line,0.45)
+    local mark=rounded(ui("Frame",b,{Size=UDim2.fromOffset(32,32),Position=UDim2.fromOffset(6,6),BackgroundColor3=accent,BorderSizePixel=0}),6)
+    local glyph=embeddedBrandIcon(mark,name)
+    local custom=(options.CommunityIcons or {})[name]
+    if options.UseCustomCommunityIcons == true and imageURI(custom) then
+        local image=ui("ImageLabel",mark,{Size=UDim2.new(1,-4,1,-4),Position=UDim2.fromOffset(2,2),BackgroundTransparency=1,Image="",ImageTransparency=1,ScaleType=Enum.ScaleType.Fit})
+        local uri=imageURI(custom)
+        local ok=pcall(function() image.Image=uri end)
+        local function refreshIcon()
+            if not alive or not image.Parent then return end
+            local loaded=ok and image.IsLoaded
+            image.ImageTransparency=loaded and 0 or 1
+            glyph.Visible=not loaded
+        end
+        on(image:GetPropertyChangedSignal("IsLoaded"),refreshIcon)
+        refreshIcon()
+    end
+    local t=label(b,name,UDim2.new(1,-65,0,20),UDim2.fromOffset(46,3),13)
+    t.TextTruncate=Enum.TextTruncate.AtEnd
+    local subtext=label(b,caption,UDim2.new(1,-65,0,17),UDim2.fromOffset(46,24),10)
+    subtext.TextColor3=C.muted
+    subtext.TextXAlignment=Enum.TextXAlignment.Left
+    subtext.TextTruncate=Enum.TextTruncate.AtEnd
+    local arrow=label(b,">",UDim2.fromOffset(16,44),UDim2.new(1,-19,0,0),16)
+    arrow.TextColor3=C.red
+    on(b.Activated,function() showLink(name,url) end)
+end
+communityButton("Discord","Join community",options.DiscordURL,36,Color3.fromRGB(88,101,242),"D")
+communityButton("TikTok","Follow creator",options.TikTokURL,85,Color3.fromRGB(12,12,17),"T")
+task.spawn(function()
+local ok, image = pcall(function()
+return Players:GetUserThumbnailAsync(
+player.UserId,
+Enum.ThumbnailType.HeadShot,
+Enum.ThumbnailSize.Size150x150
+)
+end)
+if ok and alive and avatar.Parent then
+avatar.Image = image
+end
+end)
+local content = ui("Frame", window, {
+Size = UDim2.new(1, -172, 1, 0),
+Position = UDim2.fromOffset(172, 0),
+BackgroundTransparency = 1
+})
+local heading = label(
+content,
+"Main",
+UDim2.fromOffset(370, 30),
+UDim2.fromOffset(6, 12),
+22
+)
+local sub = label(
+content,
+"",
+UDim2.fromOffset(420, 18),
+UDim2.fromOffset(7, 41),
+11
+)
+sub.TextColor3 = C.muted
+sub.TextTruncate = Enum.TextTruncate.AtEnd
+local close = button(
+content,
+"X",
+UDim2.fromOffset(38, 38),
+UDim2.new(1, -50, 0, 10)
+)
+close.TextSize = 18
+close.ZIndex = 10
+close.BackgroundColor3 = C.selected
+stroke(close,C.red,0.45)
+local topLine = ui("Frame",content,{Size=UDim2.new(1,-18,0,2),Position=UDim2.fromOffset(6,65),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
+gradient(topLine,C.red,C.bg,0)
+local pages = {}
+for _, name in ipairs(names) do
+local p = ui("ScrollingFrame", content, {
+Active = true,
+ScrollingEnabled = true,
+ScrollingDirection = Enum.ScrollingDirection.Y,
+Size = UDim2.new(1, -14, 1, -88),
+Position = UDim2.fromOffset(2, 76),
+BackgroundTransparency = 1,
+BorderSizePixel = 0,
+ScrollBarThickness = name=="Home" and 0 or 3,
+VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
+AutomaticCanvasSize = Enum.AutomaticSize.Y,
+CanvasSize = UDim2.fromOffset(0, 0),
+Visible = false
+})
+ui("UIPadding",p,{PaddingLeft=UDim.new(0,4),PaddingRight=UDim.new(0,4),PaddingTop=UDim.new(0,3),PaddingBottom=UDim.new(0,6)})
+local layout = ui("UIListLayout", p, {
+Padding = UDim.new(0, 8),
+SortOrder = Enum.SortOrder.LayoutOrder
+})
+pages[name] = p
+pageOrders[p] = 0
+end
+local function card(page, str)
+local frame = rounded(ui("Frame", page, {
+Size = UDim2.new(1, -2, 0, 49),
+BackgroundColor3 = C.card,
+BorderSizePixel = 0
+}), 8)
+local t = label(
+frame,
+str,
+UDim2.new(1, -193, 1, 0),
+UDim2.fromOffset(17, 0),
+13
+)
+t.TextYAlignment = Enum.TextYAlignment.Center
+ t.TextTruncate = Enum.TextTruncate.AtEnd
+ stroke(frame,C.line,0.32)
+ local accent = rounded(ui("Frame",frame,{Size=UDim2.fromOffset(3,25),Position=UDim2.fromOffset(5,12),BackgroundColor3=C.red,BackgroundTransparency=0.35,BorderSizePixel=0}),2)
+ return frame
+end
+local function rightButton(parent, str)
+local b = button(
+parent,
+str,
+UDim2.fromOffset(150, 30),
+UDim2.new(1, -161, 0.5, -15)
+)
+b.BackgroundColor3 = C.selected
+stroke(b,C.red,0.55)
+return b
+end
+local function toggle(frame, fn)
+    local state, busy = false, false
+    local b = button(frame,"",UDim2.fromOffset(50,26),UDim2.new(1,-62,0.5,-13))
+    b.BackgroundColor3=C.deep
+    local outline=stroke(b,C.line,0.1)
+    local knob=rounded(ui("Frame",b,{Size=UDim2.fromOffset(18,18),Position=UDim2.fromOffset(4,4),BackgroundColor3=C.muted,BorderSizePixel=0}),9)
+    local stateText=label(frame,"OFF",UDim2.fromOffset(35,26),UDim2.new(1,-103,0.5,-13),10)
+    stateText.TextColor3=C.muted
+    local function paint(v)
+        stateText.Text=v and "ON" or "OFF"
+        stateText.TextColor3=v and C.red or C.muted
+        animate(b,{BackgroundColor3=v and C.selected or C.deep})
+        animate(knob,{Position=UDim2.fromOffset(v and 28 or 4,4),BackgroundColor3=v and C.red or C.muted})
+        animate(outline,{Color=v and C.red or C.line})
+    end
+    local function set(v)
+        v=v==true
+        if busy or v==state then return end
+        busy=true
+        state=v
+        paint(v)
+        local ok,err=pcall(fn,v)
+        if not ok then warn("[AGONY TOGGLE]",err); state=not v; paint(state) end
+        busy=false
+    end
+    on(b.Activated,function() set(not state) end)
+    return set
+end
+local function status(page, name)
+local r = card(page, name)
+local t = label(
+r,
+"Not Available",
+UDim2.fromOffset(122, 27),
+UDim2.new(1, -128, 0.5, -14),
+9
+)
+t.TextYAlignment =
+Enum.TextYAlignment.Center
+t.TextTruncate =
+Enum.TextTruncate.AtEnd
+return t
+end
+local menuFrames = {}
+local function hideMenus()
+for _, m in ipairs(menuFrames) do
+m.Visible = false
+end
+end
+for _, page in pairs(pages) do
+    on(page:GetPropertyChangedSignal("CanvasPosition"), hideMenus)
+    on(page:GetPropertyChangedSignal("Visible"), hideMenus)
+end
+do
+    local sidebarScroll = side:FindFirstChild("AgonyTabScroll")
+    if sidebarScroll and sidebarScroll:IsA("ScrollingFrame") then
+        on(sidebarScroll:GetPropertyChangedSignal("CanvasPosition"), hideMenus)
+    end
+end
+local function dropdown(anchor, options, fn, keepOpen)
+local h = math.min(
+#options * 34 + 8,
+130
+)
+local m = rounded(ui(
+"ScrollingFrame",
+content,
+{
+Size = UDim2.fromOffset(165, h),
+BackgroundColor3 = C.side,
+BorderSizePixel = 0,
+Visible = false,
+ZIndex = 20,
+ScrollBarThickness = 3,
+CanvasSize = UDim2.fromOffset(
+0,
+#options * 34 + 8
+)
+}
+), 8)
+table.insert(menuFrames, m)
+local optionButtons = {}
+for i, entry in ipairs(options) do
+local b = button(
+m,
+entry.label,
+UDim2.fromOffset(150, 30),
+UDim2.fromOffset(
+5,
+4 + (i - 1) * 34
+)
+)
+b.ZIndex = 21
+if entry.value~=nil then optionButtons[entry.value] = b end
+on(b.Activated, function()
+if not keepOpen then hideMenus() end
+fn(
+entry.value,
+entry.label
+)
+end)
+end
+on(anchor.Activated, function()
+local show = not m.Visible
+hideMenus()
+if not show then
+return
+end
+local factor = scale.Scale
+if factor <= 0 then return end
+local p = anchor.AbsolutePosition - content.AbsolutePosition
+local width, height = content.AbsoluteSize.X / factor, content.AbsoluteSize.Y / factor
+local top, bottom = 76, height - 8
+local page = anchor:FindFirstAncestorWhichIsA("ScrollingFrame")
+if page and page:IsDescendantOf(content) then
+    local offset = (page.AbsolutePosition.Y - content.AbsolutePosition.Y) / factor
+    top = math.max(top, offset)
+    bottom = math.min(bottom, offset + page.AbsoluteSize.Y / factor)
+end
+local aTop, aBottom = p.Y / factor, (p.Y + anchor.AbsoluteSize.Y) / factor
+if aBottom <= top or aTop >= bottom then return end
+local below, above = math.max(0, bottom-aBottom), math.max(0, aTop-top)
+local useBelow = below >= h or below >= above
+local available = useBelow and below or above
+local actualH = math.min(h, math.max(0, available))
+if actualH < 36 then return end
+local x = math.clamp(p.X/factor, 0, math.max(0,width-165-6))
+local y = useBelow and aBottom or aTop-actualH
+m.Size = UDim2.fromOffset(165, actualH)
+m.Position = UDim2.fromOffset(x, math.clamp(y,top,math.max(top,bottom-actualH)))
+m.CanvasPosition = Vector2.zero
+m.Visible = true
+end)
+return optionButtons
+end
+local function showPage(name)
+assert(pages[name], "Unknown tab: " .. tostring(name))
+hideMenus()
+for n, p in pairs(pages) do
+p.Visible = n == name
+local active = n == name
+local decor=tabDecor[n]
+decor.rail.Visible=active
+animate(tabs[n],{BackgroundColor3=active and C.selected or C.card})
+animate(decor.outline,{Color=active and C.red or C.line,Transparency=active and 0.12 or 0.65})
+decor.index.TextColor3=active and C.red or C.muted
+if decor.icon then decor.icon.ImageColor3=active and C.red or C.muted end
+decor.arrow.TextColor3=active and C.red or C.muted
+end
+heading.Text = name
+sub.Text = name=="Home" and "" or (desc[name] or "")
+sub.Visible = sub.Text ~= ""
+heading.Position=UDim2.fromOffset(6,sub.Visible and 12 or 18)
+if name=="Home" then
+    topLine.Position=UDim2.fromOffset(6,55)
+    pages[name].Position=UDim2.fromOffset(2,64)
+    pages[name].Size=UDim2.new(1,-14,1,-76)
+else
+    topLine.Position=UDim2.fromOffset(6,65)
+end
+end
+for name, b in pairs(tabs) do
+on(b.Activated, function()
+showPage(name)
+end)
+end
+showPage(names[1])
+local function draggable(target, handle, scaled)
+local moving = false
+local inputRef
+local start
+local origin
+local moved = false
+on(handle.InputBegan, function(input)
+if input.UserInputType ==
+Enum.UserInputType.MouseButton1
+or input.UserInputType ==
+Enum.UserInputType.Touch then
+moving = true
+inputRef = input
+start = input.Position
+origin = target.Position
+moved = false
+end
+end)
+on(UIS.InputChanged, function(input)
+if not moving or not start then
+return
+end
+if input.UserInputType ~=
+Enum.UserInputType.MouseMovement
+and input ~= inputRef then
+return
+end
+local d = input.Position - start
+if d.Magnitude > 6 then
+moved = true
+end
+local f = scaled and scale.Scale or 1
+target.Position = UDim2.new(
+origin.X.Scale,
+origin.X.Offset + d.X / f,
+origin.Y.Scale,
+origin.Y.Offset + d.Y / f
+)
+end)
+on(UIS.InputEnded, function(input)
+if input == inputRef or (inputRef and input.UserInputType == Enum.UserInputType.MouseButton1 and inputRef.UserInputType == Enum.UserInputType.MouseButton1) then
+moving = false
+inputRef = nil
+end
+end)
+return function()
+return moved
+end
+end
+local dragBar = ui("TextButton", content, {
+Size = UDim2.new(1, -100, 0, 65),
+BackgroundTransparency = 1,
+Text = "",
+ZIndex = 3
+})
+draggable(window, dragBar, false)
+local float = rounded(ui(
+"ImageButton",
+screen,
+{
+Name = "AgonyFloatingButton",
+ZIndex = 20,
+Size = UDim2.fromOffset(56, 56),
+Position = UDim2.new(0, 20, 0.5, -28),
+BackgroundColor3 = C.selected,
+BorderSizePixel = 0,
+Image = "",
+ScaleType = Enum.ScaleType.Fit,
+Visible = false
+}
+), 12)
+ui("UIStroke", float, {
+Color = C.blue,
+Thickness = 1.5
+})
+local fallbackFloat = label(
+float,
+"AG",
+UDim2.fromScale(1, 1),
+nil,
+16
+)
+fallbackFloat.TextColor3 = C.white
+fallbackFloat.ZIndex = 21
+gradient(float, Color3.fromRGB(255,80,103), Color3.fromRGB(120,32,56), 45)
+float.BackgroundColor3 = Color3.new(1,1,1)
+fallbackFloat.TextXAlignment =
+Enum.TextXAlignment.Center
+fallbackFloat.TextYAlignment =
+Enum.TextYAlignment.Center
+local movedFloat = draggable(
+float,
+float,
+false
+)
+on(float.Activated, function()
+if not movedFloat() then
+window.Visible = not window.Visible
+end
+end)
+on(close.Activated, function()
+window.Visible = false
+end)
+on(UIS.InputBegan,function(input,processed)
+    if processed or UIS:GetFocusedTextBox() or not float.Visible then return end
+    if input.UserInputType==Enum.UserInputType.Keyboard and input.KeyCode==Enum.KeyCode.F then
+        window.Visible=not window.Visible
+    end
+end)
+do
+    local glowClock = 0
+    local glowAccum = 0
+    on(Run.Heartbeat, function(dt)
+        if not alive then return end
+        glowClock = glowClock + dt
+        glowAccum = glowAccum + dt
+        if glowAccum < 0.075 then return end
+        glowAccum = 0
+        local pulse = (math.sin(glowClock * 3) + 1) * 0.5
+        local color = Color3.fromRGB(255,
+            math.floor(35 + 65 * pulse),
+            math.floor(48 + 65 * pulse))
+        local transparency = 0.08 + 0.62 * (1 - pulse)
+        if title.Parent then
+            title.TextColor3 = color
+            titleGlow.Transparency = transparency
+            shellStroke.Transparency = 0.24 + 0.32 * (1-pulse)
+        end
+        if loadTitle.Parent and loading.Parent then
+            loadTitle.TextColor3 = color
+            loadGlow.Transparency = transparency
+        end
+    end)
+end
+local logoPairs={}
+local resolvedLogo=imageURI(options.Logo)
+local brandIsLocal=false
+local function registerLogo(image,fallback)
+    table.insert(logoPairs,{image,fallback})
+    if resolvedLogo then displayImage(image,fallback,resolvedLogo,nil,brandIsLocal) end
+end
+registerLogo(logoLoading,fallbackLoading)
+registerLogo(sideLogo,fallbackSide)
+for _,child in ipairs(float:GetChildren()) do
+    if child:IsA("UIGradient") then child:Destroy() end
+end
+float.BackgroundColor3=C.selected
+registerLogo(float,fallbackFloat)
+if not resolvedLogo and type(options.LogoURL)=="string" and options.LogoURL~="" then
+    task.spawn(function()
+        local assetFn=type(getcustomasset)=="function" and getcustomasset or (type(getsynasset)=="function" and getsynasset or nil)
+        if not assetFn or type(writefile)~="function" then return end
+        local path="AGONY_HUB_LOGO.png"
+        local asset
+        if type(isfile)=="function" then
+            local ok,exists=pcall(isfile,path)
+            if ok and exists then local good,v=pcall(assetFn,path);if good then asset=v end end
+        end
+        if type(asset)~="string" or asset=="" then
+            local ok,body=pcall(function() return game:HttpGet(options.LogoURL) end)
+            if alive and screen.Parent == pg and ok and type(body)=="string" and body:sub(2,4)=="PNG" then
+                local saved=pcall(writefile,path,body)
+                if saved then local good,v=pcall(assetFn,path);if good then asset=v end end
+            end
+        end
+        if not alive or screen.Parent ~= pg or type(asset)~="string" or asset=="" then return end
+        resolvedLogo=asset
+        brandIsLocal=true
+        for _,pair in ipairs(logoPairs) do
+            if pair[1].Parent and pair[2].Parent then displayImage(pair[1],pair[2],asset,nil,true) end
+        end
+    end)
+end
+on(window:GetPropertyChangedSignal("Visible"), hideMenus)
+local cameraConnection
+local function bindCamera()
+    if cameraConnection then cameraConnection:Disconnect() end
+    local camera = workspace.CurrentCamera
+    if camera then cameraConnection = on(camera:GetPropertyChangedSignal("ViewportSize"), resize) end
+    resize()
+end
+on(workspace:GetPropertyChangedSignal("CurrentCamera"), bindCamera)
+bindCamera()
+local function call(fn, ...)
+    if type(fn) ~= "function" then return end
+    local ok, err = pcall(fn, ...)
+    if not ok then warn("[AGONY UI]", err) end
+end
+local function pageFor(name)
+    assert(alive, "UI destroyed")
+    return assert(pages[name], "Unknown tab: " .. tostring(name))
+end
+function Hub:Toggle(tab, name, default, callback)
+    local set = toggle(card(pageFor(tab), name), callback or function() end)
+    if default == true then set(true) end
+    return set
+end
+function Hub:Button(tab, name, text, callback)
+    local b = rightButton(card(pageFor(tab), name), text or "RUN")
+    on(b.Activated, function() call(callback) end)
+    return b
+end
+function Hub:Dropdown(tab, name, values, default, callback)
+    local entries = {}
+    for _, value in ipairs(values) do
+        table.insert(entries, {label = tostring(value), value = value})
+    end
+    local selected = default or values[1]
+    local b = rightButton(card(pageFor(tab), name), tostring(selected or "SELECT"))
+    dropdown(b, entries, function(value, text)
+        selected = value
+        b.Text = text
+        call(callback, value)
+    end)
+    return function() return selected end
+end
+function Hub:Textbox(tab, name, placeholder, default, callback)
+    local box = rounded(ui("TextBox", card(pageFor(tab), name), {
+        Size = UDim2.fromOffset(150, 30),
+        Position = UDim2.new(1, -161, 0.5, -15),
+        BackgroundColor3 = C.side, BorderSizePixel = 0,
+        TextColor3 = C.white, PlaceholderText = placeholder or "Enter text",
+        Text = tostring(default or ""), ClearTextOnFocus = false,
+        Font = Enum.Font.Gotham, TextSize = 10
+    }), 8)
+    on(box.FocusLost, function(enterPressed) call(callback, box.Text, enterPressed) end)
+    return box
+end
+function Hub:Label(tab, name, value)
+    local t = status(pageFor(tab), name)
+    t.Text = tostring(value or "")
+    return t
+end
+function Hub:Section(tab, name, prefix)
+    local f=ui("Frame",pageFor(tab),{Size=UDim2.new(1,-2,0,29),BackgroundTransparency=1})
+    local t=label(f,(prefix==false and "" or "//  ")..name,UDim2.new(1,-12,1,0),UDim2.fromOffset(8,0),12)
+    t.TextColor3=C.red
+    return t
+end
+function Hub:ShowTab(name) showPage(name) end
+function Hub:SetVisible(value)
+    if not alive then return end
+    if float.Visible then window.Visible = value == true end
+end
+function Hub:Destroy()
+    dispose(false)
+end
+function Hub:Dashboard(tab)
+    local page=pageFor(tab)
+    if self.HomeBuilt then return end
+    self.HomeBuilt=true
+    local hero=rounded(ui("Frame",page,{Size=UDim2.new(1,-2,0,100),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true}),12)
+    gradient(hero,Color3.fromRGB(28,11,19),Color3.fromRGB(67,12,24),12)
+    local heroEdge=stroke(hero,C.red,0.25)
+    local art=ui("Frame",hero,{Size=UDim2.new(0.37,0,1,0),Position=UDim2.fromScale(0.63,0),BackgroundTransparency=1,ClipsDescendants=true})
+    for i=1,3 do
+        local ring=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.53,0.5),Size=UDim2.fromOffset(64+i*22,64+i*22),BackgroundTransparency=1,BorderSizePixel=0}),100)
+        stroke(ring,C.red,0.66+i*0.08,1)
+    end
+    for i=1,3 do
+        ui("Frame",art,{Size=UDim2.fromOffset(14,160),Position=UDim2.fromScale(0.12+i*0.22,-0.2),Rotation=28,BackgroundColor3=C.red,BackgroundTransparency=0.94,BorderSizePixel=0})
+    end
+    local badge=rounded(ui("Frame",art,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.53,0.5),Size=UDim2.fromOffset(94,94),BackgroundColor3=C.deep,BackgroundTransparency=0.23,BorderSizePixel=0}),16)
+    stroke(badge,C.red,0.38,1.5)
+    local brand=ui("ImageLabel",badge,{Name="AgonyHubLogo",Size=UDim2.new(1,-8,1,-8),Position=UDim2.fromOffset(4,4),BackgroundTransparency=1,Image="",ScaleType=Enum.ScaleType.Fit})
+    local fallback=label(badge,"AG",UDim2.fromScale(1,1),nil,34)
+    fallback.TextXAlignment=Enum.TextXAlignment.Center;fallback.TextColor3=C.red
+    registerLogo(brand,fallback)
+    local word=label(hero,"A G O N Y  H U B",UDim2.new(0.64,-18,0,17),UDim2.fromOffset(15,13),11)
+    word.TextColor3=C.red
+    local welcome=label(hero,"",UDim2.new(0.63,-18,0,35),UDim2.fromOffset(15,32),24)
+    welcome.TextTruncate=Enum.TextTruncate.AtEnd
+    table.insert(welcomeLabels,welcome)
+    refreshPrivacy()
+    local marker=ui("Frame",hero,{Size=UDim2.fromOffset(100,3),Position=UDim2.fromOffset(16,78),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0})
+    gradient(marker,C.red,C.amber)
+    local performanceRow=ui("Frame",page,{Size=UDim2.new(1,-2,0,23),BackgroundTransparency=1})
+    local performance=label(performanceRow,"PERFORMANCE",UDim2.new(1,-12,1,0),UDim2.fromOffset(8,0),11)
+    performance.TextColor3=C.red
+    local metrics=ui("Frame",page,{Size=UDim2.new(1,-2,0,106),BackgroundTransparency=1})
+    local function metric(index,name,caption,color)
+        local f=rounded(ui("Frame",metrics,{Size=UDim2.new(0.25,-6,1,0),Position=UDim2.new((index-1)*0.25,(index-1)*2,0,0),LayoutOrder=index,BackgroundColor3=C.card,BorderSizePixel=0}),10)
+        stroke(f,color,0.55)
+        local t=label(f,name,UDim2.new(1,-20,0,23),UDim2.fromOffset(10,8),12);t.TextColor3=C.muted
+        local val=label(f,"--",UDim2.new(1,-20,0,40),UDim2.fromOffset(10,31),27);val.TextColor3=color;val.TextScaled=true
+        ui("UITextSizeConstraint",val,{MinTextSize=12,MaxTextSize=27})
+        local foot=label(f,caption,UDim2.new(1,-20,0,20),UDim2.fromOffset(10,77),12);foot.TextColor3=C.muted
+        return val,foot
+    end
+    local fps,fpsRating=metric(1,"FPS","MEASURING...",C.red)
+    local ping,pingRating=metric(2,"PING","MEASURING...",C.amber)
+    local count=metric(3,"SERVER","players",C.green)
+    local elapsed=metric(4,"SESSION","hub uptime",C.white)
+    local homeCards=ui("Frame",page,{Size=UDim2.new(1,-2,0,166),BackgroundTransparency=1})
+    profile.Parent=homeCards
+    profile.Visible=true
+    credits.Parent=homeCards
+    credits.Visible=true
+    local frames, seconds, started=0,0,os.clock()
+    on(Run.RenderStepped,function(dt)
+        frames = frames + 1;seconds = seconds + dt
+        if seconds<1 then return end
+        local currentFPS=math.floor(frames/seconds+0.5);frames,seconds=0,0
+        if not window.Visible or not page.Visible then return end
+        fps.Text=tostring(currentFPS)
+        local function rate(valueLabel,ratingLabel,rating,color)
+            valueLabel.TextColor3=color
+            ratingLabel.TextColor3=color
+            ratingLabel.Text=rating
+        end
+        if currentFPS>=60 then rate(fps,fpsRating,"EXCELLENT",C.green)
+        elseif currentFPS>=45 then rate(fps,fpsRating,"GOOD",C.green)
+        elseif currentFPS>=30 then rate(fps,fpsRating,"FAIR",C.amber)
+        else rate(fps,fpsRating,"POOR",C.red) end
+        local ok,ms=pcall(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
+        if ok and type(ms)=="number" and ms>=0 and ms<math.huge then
+            ping.Text=tostring(math.floor(ms+0.5)).." ms"
+            if ms<=50 then rate(ping,pingRating,"EXCELLENT",C.green)
+            elseif ms<=100 then rate(ping,pingRating,"GOOD",C.green)
+            elseif ms<=150 then rate(ping,pingRating,"FAIR",C.amber)
+            else rate(ping,pingRating,"POOR",C.red) end
+        else
+            ping.Text="N/A"
+            rate(ping,pingRating,"UNAVAILABLE",C.muted)
+        end
+        count.Text=tostring(#Players:GetPlayers()).."/"..tostring(Players.MaxPlayers)
+        local t=math.floor(os.clock()-started)
+        elapsed.Text=string.format("%02d:%02d",math.floor(t/60),t%60)
+    end)
+end
+Hub.Home = Hub.Dashboard
+Hub.Pages = pages
+Hub.Theme = C
+local duration = math.max(0, tonumber(options.LoadingTime) or 10)
+local started = os.clock()
+local function finish()
+    if not alive or screen.Parent ~= pg then return end
+    loading:Destroy()
+    float.Visible = true
+    if options.OpenOnLoad then window.Visible = true end
+end
+if duration == 0 then
+    finish()
+else
+    task.spawn(function()
+        while alive and screen.Parent == pg do
+            local progress = math.clamp((os.clock() - started) / duration, 0, 1)
+            barFill.Size = UDim2.fromScale(progress, 1)
+            barLabel.Text = "Loading... " .. tostring(math.floor(progress * 100)) .. "%"
+            if progress >= 1 then break end
+            task.wait(0.05)
+        end
+        if alive then finish() end
+    end)
+end
+return Hub
+end
+return Library
+end)()
+local pg = player:WaitForChild("PlayerGui")
+for _, gui in ipairs(pg:GetChildren()) do
+    if gui:IsA("ScreenGui") and gui.Name == "AgonyHubLoading" then gui:Destroy() end
+end
+local Hub = AgonyUI.Create({
+    Id = "AgonyHubUI",
+    Version = "STEAL AN ANIME PACK",
+    Developer = "mrpopsicle12",
+    HideUsername = true,
+    DiscordURL = "https://discord.gg/PNrfkj73eT",
+    TikTokURL = "https://www.tiktok.com/@mrpopscle12?is_from_webapp=1&sender_device=pc",
+    Tabs = {"Home", "Farm", "Upgrades", "Settings"},
+    Descriptions = {Farm = "Auto Steal / Treadmill", Upgrades="Game progression", Settings = "Preferences"},
+    OpenOnLoad = true,
+    LoadingTime = 10,
+    Logo = "",
+    LogoURL = "https://raw.githubusercontent.com/mrpopsicle12/AgonyHubAssets/main/agony.png",
+    UseCustomCommunityIcons = false,
+    TabIcons = {
+        Home = "rbxassetid://10723407389",
+        Farm = "rbxassetid://10734975692",
+        Settings = "rbxassetid://10734950309",
+    },
+})
+Hub:Home("Home")
+Hub:Section("Farm", "Auto Steal", false)
+local setStealToggle, setTreadmillToggle, setPlaceToggle
+setStealToggle = Hub:Toggle("Farm", "Auto Steal", false, function(enabled)
+    if disposed then return end
+    if enabled then
+        if setTreadmillToggle then setTreadmillToggle(false) end
+        requested = true
+        publish("Starting")
+    else
+        pauseWorker()
+    end
+end)
+local stages,stageNumbers={},{}
+local gameFolder=workspace:FindFirstChild("Game")
+local packFolder=gameFolder and gameFolder:FindFirstChild("Packs")
+if packFolder then
+    for _,folder in ipairs(packFolder:GetChildren()) do
+        local n=tonumber(folder.Name:match("^Stage(%d+)$"))
+        if n then table.insert(stageNumbers,n) end
+    end
+end
+if #stageNumbers==0 then for n=1,10 do table.insert(stageNumbers,n) end end
+table.sort(stageNumbers)
+for _,n in ipairs(stageNumbers) do table.insert(stages,"Stage "..n) end
+CONFIG.Stage=stageNumbers[1]
+Hub:Dropdown("Farm", "Select Stage", stages, stages[1], function(value)
+    controller.SetStage(tonumber(value:match("%d+")) or 1)
+end)
+local speedBox
+speedBox = Hub:Textbox("Farm", "Tween Speed (studs/s)", "20 - 150", CONFIG.TweenSpeed, function(text)
+    local speed, valid = controller.SetTweenSpeed(text)
+    speedBox.Text = tostring(speed)
+    if not valid then report("speed", "Enter a valid number from 20 to 150.") end
+end)
+Hub:Toggle("Farm","Adaptive Tween Speed",false,function(enabled) adaptiveSpeed=enabled end)
+Hub:Toggle("Farm","Prioritize Pack Luck",false,function(enabled) gameLogic.flags.bestLuck=enabled end)
+Hub:Textbox("Farm","Minimum Pack Luck","0 = any","0",function(value) gameLogic.filters.minLuck=math.max(0,tonumber(value) or 0) end)
+statusLabel = Hub:Label("Farm", "Status", "Idle")
+Hub:Section("Farm","Packs",false)
+setPlaceToggle=Hub:Toggle("Farm","Auto Place",false,function(enabled)
+    if disposed then return end
+    if enabled and setTreadmillToggle then setTreadmillToggle(false) end
+    placeRequested=enabled
+    nextPlace=0
+    if not enabled and not requested then
+        running=false
+        if activeTween then pcall(function() activeTween:Cancel() end) end
+    end
+    setStatus(placeStatusLabel,enabled and "Starting" or "Idle")
+end)
+placeStatusLabel=Hub:Label("Farm","Place Status","Idle")
+Hub:Toggle("Farm","Auto Open",false,function(enabled) gameLogic.flags.open=enabled;gameLogic.openNeedsHome=false;gameLogic.next.open=0;gameLogic.note("open",enabled and "Starting" or "Idle") end)
+gameLogic.status.open=Hub:Label("Farm","Open Status","Idle")
+Hub:Toggle("Farm","Equip Best",false,function(enabled) equipRequested=enabled;setStatus(equipStatusLabel,enabled and "Starting" or "Idle") end)
+equipStatusLabel=Hub:Label("Farm","Equip Status","Idle")
+Hub:Section("Upgrades","Progression",false)
+Hub:Toggle("Upgrades","Upgrade All",false,function(enabled) upgradeRequested=enabled;setStatus(upgradeStatusLabel,enabled and "Starting" or "Idle") end)
+upgradeStatusLabel=Hub:Label("Upgrades","Upgrade Status","Idle")
+for _,entry in ipairs({{"tread","Auto Upgrade Treadmill"},{"base","Auto Upgrade Base"},{"luck","Auto Upgrade Luck"},{"rebirth","Auto Rebirth"},{"gear","Auto Equip Gears"}}) do
+    local key,name=entry[1],entry[2]
+    Hub:Toggle("Upgrades",name,false,function(enabled) gameLogic.flags[key]=enabled;gameLogic.next[key]=0;gameLogic.note(key,enabled and "Starting" or "Idle") end)
+    gameLogic.status[key]=Hub:Label("Upgrades",name.." Status","Idle")
+end
+Hub:Section("Upgrades","Auras & Coaches",false)
+for _,entry in ipairs({{"buyAura","Auto Buy Aura"},{"equipAura","Auto Equip Aura"},{"buyCoach","Auto Buy Coach"},{"equipCoach","Auto Equip Coach"}}) do
+    local key,name=entry[1],entry[2]
+    Hub:Toggle("Upgrades",name,false,function(enabled) gameLogic.flags[key]=enabled end)
+end
+gameLogic.status.aura=Hub:Label("Upgrades","Aura Status","Idle")
+gameLogic.status.coach=Hub:Label("Upgrades","Coach Status","Idle")
+Hub:Section("Farm", "Treadmill", false)
+setTreadmillToggle = Hub:Toggle("Farm", "Auto Treadmill", false, function(enabled)
+    if disposed then return end
+    if enabled then
+        if setStealToggle then setStealToggle(false) end
+        if setPlaceToggle then setPlaceToggle(false) end
+        treadmillRequested = true
+        treadmillPart = nil
+        treadmillTargetPart = nil
+        nextTreadmillSearch = 0
+        treadmillArrived = false
+        treadmillArrivedAt = 0
+        resetBoost()
+        publishTreadmill("Starting")
+    else
+        treadmillRequested = false
+        running = false
+        if activeTween then pcall(function() activeTween:Cancel() end) end
+        publishTreadmill("Idle")
+    end
+end)
+Hub:Toggle("Farm","Auto Admin Treadmill",false,function(enabled)
+    gameLogic.flags.admin=enabled;gameLogic.next.admin=0
+    gameLogic.note("admin",enabled and "Starting" or "Idle")
+end)
+gameLogic.status.admin=Hub:Label("Farm","Admin Treadmill Status","Idle")
+Hub:Toggle("Farm", "Auto Boost", false, function(enabled)
+    boostEnabled = enabled
+    resetBoost()
+end)
+treadmillStatusLabel = Hub:Label("Farm", "Treadmill Status", "Idle")
+Hub:Section("Settings", "Preferences", false)
+Hub:Toggle("Settings","FPS Optimizer",false,function(enabled) gameLogic.graphics(enabled) end)
+Hub:Label("Settings","Additional logic source","Tora IsMe / BigFroot reference")
+Hub:Button("Settings", "Unload UI", "UNLOAD", function()
+    controller.Stop()
+    Hub:Destroy()
+end)
+local gui = pg:FindFirstChild("AgonyHubUI")
+if gui then gui.Destroying:Connect(controller.Stop) end
+Hub:ShowTab("Home")
+task.spawn(function()
+    while not disposed do
+        if requested or placeRequested or gameLogic.flags.open and gameLogic.openNeedsHome and os.clock()>=(gameLogic.next.openHome or 0) then
+            running = true
+            local revisionBeforeCycle = spawnRevision
+            local ok, nextImmediately = pcall(function()
+                if not leaveTraining() then publish("Leaving treadmill");return false end
+                if gameLogic.openHomeCycle() then return false end
+                if placeRequested and carrying()==false and placeCycle() then return false end
+                if requested then return cycle() end
+                return false
+            end)
+            if not ok then
+                releasePrompt()
+                if activeTween then pcall(function() activeTween:Cancel() end); activeTween = nil end
+                if requested then publish("Error - see console") end
+                report("error", nextImmediately)
+            end
+            running = false
+            if ok and nextImmediately then
+                MovementRunService.Heartbeat:Wait()
+            else
+                local deadline = os.clock() + CONFIG.RetryDelay
+                while (requested or placeRequested) and not disposed and os.clock() < deadline do
+                    if spawnRevision ~= revisionBeforeCycle then break end
+                    MovementRunService.Heartbeat:Wait()
+                end
+            end
+        elseif treadmillRequested or gameLogic.flags.admin then
+            running = true
+            local ok, err = pcall(treadmillCycle)
+            if not ok then
+                if activeTween then pcall(function() activeTween:Cancel() end); activeTween = nil end
+                if treadmillRequested then publishTreadmill("Error - see console") end
+                report("treadmill_error", err)
+            end
+            running = false
+            task.wait(CONFIG.BoostScanInterval)
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+task.spawn(function()
+    while not disposed do
+        if boostEnabled and (isTraining() or treadmillRequested or gameLogic.flags.admin) then
+            local ok,err=pcall(function() gameLogic.bindBoost();scanBoost() end)
+            if not ok then report("boost_error",err) end
+        elseif pendingBoost or boostDiagnosticKey~="" then resetBoost() end
+        task.wait(CONFIG.BoostScanInterval)
+    end
+end)
+task.spawn(function()
+    while not disposed do
+        if equipRequested then
+            local records=gameLogic.records()
+            local signature={}
+            if records then for _,record in ipairs(records) do if gameLogic.isCharacter(record)==true and not gameLogic.placed(record) then table.insert(signature,record.Id) end end end
+            table.sort(signature)
+            local sig=table.concat(signature,"|")
+            if records and sig~="" and (sig~=gameLogic.equipSignature or os.clock()>=(gameLogic.next.equip or 0)) then
+            gameLogic.equipSignature=sig;gameLogic.next.equip=os.clock()+60
+            local ok,result=invoke("Packs","EquipBest",{})
+            if equipRequested and not disposed then setStatus(equipStatusLabel,ok and (result==true or type(result)=="table" and result.Success==true) and "Equipped" or "Request failed") end
+            elseif records and sig=="" then setStatus(equipStatusLabel,"No backpack characters")
+            elseif not records then setStatus(equipStatusLabel,"Waiting for inventory") end
+            task.wait(4)
+        else gameLogic.equipSignature=nil;task.wait(.2) end
+    end
+end)
+task.spawn(function()
+    local jobs={
+        {"open",2,function() gameLogic.openStep() end},
+        {"tread",4,function() gameLogic.note("tread",gameLogic.upgradeStep("tread")) end},
+        {"base",4,function() gameLogic.note("base",gameLogic.upgradeStep("base")) end},
+        {"luck",4,function() gameLogic.note("luck",gameLogic.upgradeStep("luck")) end},
+        {"rebirth",10,function() gameLogic.note("rebirth",gameLogic.rebirthStep()) end},
+        {"gear",15,function() local ok,reason=gameLogic.request("Items","EquipBest");gameLogic.note("gear",ok and "Equipped best gears" or (type(reason)=="string" and reason or "Rejected")) end},
+        {"aura",8,function() gameLogic.note("aura",gameLogic.auraStep()) end},
+        {"coach",8,function() gameLogic.note("coach",gameLogic.coachStep()) end}
+    }
+    while not disposed do
+        for _,job in ipairs(jobs) do
+            if disposed then break end
+            local key=job[1]
+            local enabled=gameLogic.flags[key] or upgradeRequested and (key=="tread" or key=="base" or key=="luck") or key=="aura" and (gameLogic.flags.buyAura or gameLogic.flags.equipAura) or key=="coach" and (gameLogic.flags.buyCoach or gameLogic.flags.equipCoach)
+            if enabled and os.clock()>=(gameLogic.next[key] or 0) then
+                gameLogic.next[key]=os.clock()+job[2]
+                local ok,err=pcall(job[3])
+                if not ok then gameLogic.note(key,"Error - see console");report("game_"..key,err);gameLogic.next[key]=os.clock()+10 end
+            end
+        end
+        if upgradeRequested then setStatus(upgradeStatusLabel,"Checking affordable upgrades") end
+        task.wait(.25)
+    end
+end)
+print("[AGONY HUB] V26 ready. All automation OFF by default.")
